@@ -1,0 +1,47 @@
+# Spins up a 3-node cryptocurrency network.
+# Each container binds to its own port, advertises itself by service name,
+# and nodes 2 & 3 bootstrap from node 1.
+#
+# Usage:
+#   docker compose up --build          # start all three nodes
+#   docker compose up --build -d       # start in background
+#   curl http://localhost:5000/status  # query node 1
+#   curl http://localhost:5001/status  # query node 2
+#   docker compose down                # stop and remove containers
+
+services:
+  node1:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      HOST_ADDR: node1
+      DIFFICULTY: 2
+      MINER_ADDRESS: node1_miner
+
+  node2:
+    build: .
+    ports:
+      - "5001:5001"
+    environment:
+      PORT: 5001
+      HOST_ADDR: node2
+      SEED_PEER: node1:5000
+      DIFFICULTY: 2
+      MINER_ADDRESS: node2_miner
+    depends_on:
+      - node1
+
+  node3:
+    build: .
+    ports:
+      - "5002:5002"
+    environment:
+      PORT: 5002
+      HOST_ADDR: node3
+      SEED_PEER: node1:5000
+      DIFFICULTY: 2
+      MINER_ADDRESS: node3_miner
+    depends_on:
+      - node1
