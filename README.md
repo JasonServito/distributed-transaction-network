@@ -1,5 +1,7 @@
 # Distributed Transaction Network
 
+[![check](https://github.com/JasonServito/distributed-transaction-network/actions/workflows/check.yml/badge.svg)](https://github.com/JasonServito/distributed-transaction-network/actions/workflows/check.yml)
+
 A small cryptocurrency network you can run on your own machine: several independent servers ("nodes") accept signed payments, bundle them into blocks, and agree on one shared history, even when nodes crash or disagree.
 
 <!-- TODO: add demo -->
