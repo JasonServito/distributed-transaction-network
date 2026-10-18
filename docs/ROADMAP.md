@@ -70,7 +70,7 @@ Milestones run **in order, one at a time**. Each ends with a **gate**: the next 
 
 | Milestone | Goal | Gate (must pass to move on) | Status |
 |---|---|---|---|
-| **M0 Guardrails** | One command tells us if anything broke | `scripts/check.sh` passes locally and in CI | todo |
+| **M0 Guardrails** | One command tells us if anything broke | `scripts/check.sh` passes locally and in CI | doing |
 | **M1 Correct & strict** | Forks always heal; invalid blocks are always rejected | check.sh green; simulation passes 20/20 runs in a row | todo |
 | **M2 Durable nodes** | Nodes survive a hard kill | `kill -9` + restart test passes with no peers online | todo |
 | **M3 Resilient peers** | No single point of failure; partitions heal by themselves | Simulation passes with `cross_register`/`force_sync` removed, plus a new partition test | todo |
@@ -115,7 +115,7 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 
 | ID | Task | Why | Done when | Status |
 |---|---|---|---|---|
-| B-01 | Move `pytest` and dev tools into `requirements-dev.txt` | G | Docker image builds without pytest; dev install works | todo |
+| B-01 | Move `pytest` and dev tools into `requirements-dev.txt` | G | Docker image builds without pytest; dev install works | done |
 | B-02 | Add `ruff` (lint + format) via `pyproject.toml`; fix findings | G | `ruff check .` and `ruff format --check .` exit 0 | todo |
 | B-03 | Add `mypy` (non-strict) for all packages; fix findings | G | `mypy .` exits 0 | todo |
 | B-04 | `scripts/check.sh`: ruff + mypy + pytest | G | One command, non-zero exit on any failure | todo |
