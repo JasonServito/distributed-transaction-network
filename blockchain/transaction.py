@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from utils.logger import get_logger
-from utils.signing import verify, pem_to_public_key
+from utils.signing import pem_to_public_key, verify
 
 logger = get_logger(__name__)
 

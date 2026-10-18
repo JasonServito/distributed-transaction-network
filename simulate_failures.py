@@ -469,7 +469,7 @@ def test_propagation_performance(procs: list) -> None:
     if propagation_times:
         max_prop = max(propagation_times.values())
         total = time.time() - t_start
-        print(f"\n  Performance summary")
+        print("\n  Performance summary")
         print(f"    Mining time            : {mine_duration:.3f}s")
         print(f"    Max propagation delay  : {max_prop:.3f}s")
         print(f"    Total (mine + sync)    : {total:.3f}s")

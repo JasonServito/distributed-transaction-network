@@ -4,7 +4,6 @@ import pytest
 from blockchain.block import Block
 from blockchain.transaction import Transaction
 
-
 # ------------------------------------------------------------------ #
 #  Fixtures
 # ------------------------------------------------------------------ #

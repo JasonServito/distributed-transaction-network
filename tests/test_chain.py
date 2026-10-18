@@ -3,7 +3,6 @@ import pytest
 
 from blockchain.block import Block
 from blockchain.chain import Blockchain
-from blockchain.transaction import Transaction
 from consensus.proof_of_work import ProofOfWork
 
 DIFFICULTY = 2  # low difficulty so tests run quickly
