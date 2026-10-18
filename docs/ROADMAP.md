@@ -50,6 +50,7 @@ Every must-have task below traces back to one of these five outcomes (column **W
 | Minimal wallet CLI | Fork-rate vs latency study (`tc netem`) | Rewrite in Go/Rust, microservices |
 | Deploy on 3+ machines | Faster tip lookup (`_find_tips` scans every block) | |
 | 4 experiments + README results | Property-based tests | |
+| | Narrow blind `except Exception` blocks (`signing.py`, `transaction.py`, simulation); stricter ruff rules | |
 
 **Rule:** a new idea goes into **Later** by default. It moves to Must-have only if it's needed for one of the five outcomes.
 
