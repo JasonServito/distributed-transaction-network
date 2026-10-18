@@ -19,6 +19,7 @@ Examples
 Environment variables (see config.py or .env) override defaults.
 CLI arguments take the highest precedence.
 """
+
 import sys
 
 import config

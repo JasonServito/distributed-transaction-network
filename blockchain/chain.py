@@ -61,7 +61,8 @@ class Blockchain:
             if block.previous_hash not in self._block_store:
                 logger.warning(
                     "block %d rejected: unknown parent %s",
-                    block.index, block.previous_hash[:12],
+                    block.index,
+                    block.previous_hash[:12],
                 )
                 return False
 
@@ -73,7 +74,9 @@ class Blockchain:
             self._block_store[block.hash] = block
             logger.info(
                 "block %d stored  hash=%.12s  parent=%.12s",
-                block.index, block.hash, block.previous_hash,
+                block.index,
+                block.hash,
+                block.previous_hash,
             )
 
             # Reselect the canonical chain (may trigger a reorg)
@@ -105,14 +108,14 @@ class Blockchain:
         visited: set = set()
 
         while current in self._block_store:
-            if current in visited:          # cycle guard — should never happen
+            if current in visited:  # cycle guard — should never happen
                 logger.error("cycle detected in block store at %s", current[:12])
                 return []
             visited.add(current)
             block = self._block_store[current]
             path.append(block)
             if block.previous_hash == "0" * 64:
-                break                       # reached genesis
+                break  # reached genesis
             current = block.previous_hash
 
         path.reverse()
@@ -138,7 +141,9 @@ class Blockchain:
             self.chain = best_chain
             logger.info(
                 "chain reorg: length=%d  old_tip=%.12s  new_tip=%.12s",
-                len(self.chain), old_tip, self.chain[-1].hash,
+                len(self.chain),
+                old_tip,
+                self.chain[-1].hash,
             )
 
     def has_block(self, block_hash: str) -> bool:

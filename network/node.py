@@ -30,12 +30,12 @@ def create_app(cfg: types.ModuleType) -> Flask:
     # ------------------------------------------------------------------
     _metrics = {
         "start_time": time.time(),
-        "blocks_mined": 0,         # blocks this node successfully mined
-        "blocks_received": 0,      # new blocks accepted from peers
-        "blocks_rejected": 0,      # blocks rejected (bad PoW / unknown parent)
-        "reorgs": 0,               # chain reorganisations triggered
-        "sync_calls": 0,           # incremental sync rounds initiated
-        "tx_submitted": 0,         # transactions accepted into mempool
+        "blocks_mined": 0,  # blocks this node successfully mined
+        "blocks_received": 0,  # new blocks accepted from peers
+        "blocks_rejected": 0,  # blocks rejected (bad PoW / unknown parent)
+        "reorgs": 0,  # chain reorganisations triggered
+        "sync_calls": 0,  # incremental sync rounds initiated
+        "tx_submitted": 0,  # transactions accepted into mempool
     }
     _metrics_lock = threading.Lock()
 
@@ -59,6 +59,7 @@ def create_app(cfg: types.ModuleType) -> Flask:
                 requests.post(f"http://{peer}{endpoint}", json=payload, timeout=3)
             except requests.RequestException as e:
                 logger.warning("broadcast to %s failed: %s", peer, e)
+
         for peer in list(peers):
             threading.Thread(target=_send, args=(peer,), daemon=True).start()
 
@@ -96,11 +97,13 @@ def create_app(cfg: types.ModuleType) -> Flask:
         if tx.sender != "COINBASE":
             balance = blockchain.get_balance(tx.sender)
             if balance < tx.amount:
-                return jsonify({
-                    "error": "insufficient balance",
-                    "balance": round(balance, 8),
-                    "required": tx.amount,
-                }), 400
+                return jsonify(
+                    {
+                        "error": "insufficient balance",
+                        "balance": round(balance, 8),
+                        "required": tx.amount,
+                    }
+                ), 400
         if mempool.add_transaction(tx):
             _inc("tx_submitted")
             _broadcast("/transactions/new", tx.to_dict())
@@ -138,9 +141,7 @@ def create_app(cfg: types.ModuleType) -> Flask:
                         for tx in orphaned.transactions:
                             if tx.sender != "COINBASE":
                                 mempool.add_transaction(tx)
-            mempool.remove_transactions(
-                [tx.tx_id for tx in block.transactions if tx.sender != "COINBASE"]
-            )
+            mempool.remove_transactions([tx.tx_id for tx in block.transactions if tx.sender != "COINBASE"])
             _broadcast("/blocks/new", block.to_dict())
             return jsonify({"message": f"block {block.index} accepted"}), 201
 
@@ -192,12 +193,14 @@ def create_app(cfg: types.ModuleType) -> Flask:
 
     @app.route("/status", methods=["GET"])
     def status():
-        return jsonify({
-            "chain_length": len(blockchain.chain),
-            "mempool_size": mempool.size(),
-            "peers": sorted(peers),
-            "difficulty": cfg.DIFFICULTY,
-        }), 200
+        return jsonify(
+            {
+                "chain_length": len(blockchain.chain),
+                "mempool_size": mempool.size(),
+                "peers": sorted(peers),
+                "difficulty": cfg.DIFFICULTY,
+            }
+        ), 200
 
     @app.route("/balance", methods=["GET"])
     def get_balance():
@@ -248,18 +251,20 @@ def create_app(cfg: types.ModuleType) -> Flask:
         chain_len = len(blockchain.chain)
         known_total = len(blockchain._block_store)
 
-        return jsonify({
-            "uptime_seconds":     round(time.time() - snapshot["start_time"], 2),
-            "blocks_mined":       snapshot["blocks_mined"],
-            "blocks_received":    snapshot["blocks_received"],
-            "blocks_rejected":    snapshot["blocks_rejected"],
-            "reorgs":             snapshot["reorgs"],
-            "sync_calls":         snapshot["sync_calls"],
-            "tx_submitted":       snapshot["tx_submitted"],
-            "chain_length":       chain_len,
-            "known_blocks_total": known_total,
-            "fork_pool_size":     known_total - chain_len,
-            "peer_count":         len(peers),
-        }), 200
+        return jsonify(
+            {
+                "uptime_seconds": round(time.time() - snapshot["start_time"], 2),
+                "blocks_mined": snapshot["blocks_mined"],
+                "blocks_received": snapshot["blocks_received"],
+                "blocks_rejected": snapshot["blocks_rejected"],
+                "reorgs": snapshot["reorgs"],
+                "sync_calls": snapshot["sync_calls"],
+                "tx_submitted": snapshot["tx_submitted"],
+                "chain_length": chain_len,
+                "known_blocks_total": known_total,
+                "fork_pool_size": known_total - chain_len,
+                "peer_count": len(peers),
+            }
+        ), 200
 
     return app

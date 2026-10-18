@@ -39,14 +39,14 @@ import requests
 PYTHON = sys.executable
 MAIN_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
 
-DIFFICULTY = 1          # Low difficulty so blocks mine in milliseconds
+DIFFICULTY = 1  # Low difficulty so blocks mine in milliseconds
 PORTS = [5010, 5011, 5012]
 BASE = "http://127.0.0.1"
 
 STARTUP_TIMEOUT = 15.0  # Max seconds to wait for a node to become ready
-PORT_RELEASE_WAIT = 2.0 # Seconds to wait after killing before restarting on the same port
+PORT_RELEASE_WAIT = 2.0  # Seconds to wait after killing before restarting on the same port
 PROPAGATION_WAIT = 4.0  # Seconds to allow block gossip to settle
-SYNC_WAIT = 8.0         # Seconds to wait after restarting a crashed node
+SYNC_WAIT = 8.0  # Seconds to wait after restarting a crashed node
 
 _BASE_ENV = {
     **os.environ,
@@ -60,15 +60,15 @@ _BASE_ENV = {
 # ---------------------------------------------------------------------------
 
 _GREEN = "\033[92m"
-_RED   = "\033[91m"
-_CYAN  = "\033[96m"
-_BOLD  = "\033[1m"
+_RED = "\033[91m"
+_CYAN = "\033[96m"
+_BOLD = "\033[1m"
 _RESET = "\033[0m"
 
 PASS_TAG = f"{_GREEN}PASS{_RESET}"
 FAIL_TAG = f"{_RED}FAIL{_RESET}"
 
-_results: List = []   # list of (name: str, passed: bool, detail: str)
+_results: List = []  # list of (name: str, passed: bool, detail: str)
 
 
 def _report(name: str, passed: bool, detail: str = "") -> None:
@@ -87,6 +87,7 @@ def _section(title: str) -> None:
 # ---------------------------------------------------------------------------
 # Node management
 # ---------------------------------------------------------------------------
+
 
 def _node_env(port: int, seed: str = "") -> dict:
     env = {**_BASE_ENV, "PORT": str(port)}
@@ -110,7 +111,7 @@ def start_node(port: int, seed: str = "") -> subprocess.Popen:
 def kill_node(proc: subprocess.Popen) -> None:
     """Terminate the process and wait for it to fully exit."""
     if proc.poll() is not None:
-        return   # already dead
+        return  # already dead
     proc.terminate()
     try:
         proc.wait(timeout=5)
@@ -149,15 +150,16 @@ def kill_and_wait_port_free(proc: subprocess.Popen, port: int) -> None:
     while time.time() < deadline:
         try:
             requests.get(f"{BASE}:{port}/status", timeout=0.3)
-            time.sleep(0.2)   # port still responding — old process not fully dead
+            time.sleep(0.2)  # port still responding — old process not fully dead
         except requests.RequestException:
-            break              # port is free
-    time.sleep(0.3)            # tiny extra margin for OS to release the socket
+            break  # port is free
+    time.sleep(0.3)  # tiny extra margin for OS to release the socket
 
 
 # ---------------------------------------------------------------------------
 # Chain inspection helpers
 # ---------------------------------------------------------------------------
+
 
 def chain_length(port: int) -> int:
     try:
@@ -229,6 +231,7 @@ def force_sync(port: int, from_port: int) -> None:
 # Test 1 — Crash Recovery
 # ---------------------------------------------------------------------------
 
+
 def test_crash_recovery(procs: list) -> None:
     """
     Scenario
@@ -284,6 +287,7 @@ def test_crash_recovery(procs: list) -> None:
 # Test 2 — Fork Resolution via Concurrent Mining
 # ---------------------------------------------------------------------------
 
+
 def test_fork_resolution(procs: list) -> None:
     """
     Scenario
@@ -311,10 +315,10 @@ def test_fork_resolution(procs: list) -> None:
         if chain_length(port) < 0:
             print(f"  WARN: node :{port} is unreachable — skipping Test 2")
             _report("Both nodes mined a fork block", False, f"node :{port} was down")
-            _report("All nodes converge on the same tip (longest chain wins)", False,
-                    f"node :{port} was down")
-            _report("Winning chain is longer than the fork branch", False,
-                    f"node :{port} was down")
+            _report(
+                "All nodes converge on the same tip (longest chain wins)", False, f"node :{port} was down"
+            )
+            _report("Winning chain is longer than the fork branch", False, f"node :{port} was down")
             return
 
     cross_register(p0, p1, p2)
@@ -344,10 +348,8 @@ def test_fork_resolution(procs: list) -> None:
     _report("Both nodes mined a fork block", a_mined and b_mined)
 
     if not (a_mined and b_mined):
-        _report("All nodes converge on the same tip (longest chain wins)", False,
-                "skipped — one mine failed")
-        _report("Winning chain is longer than the fork branch", False,
-                "skipped — one mine failed")
+        _report("All nodes converge on the same tip (longest chain wins)", False, "skipped — one mine failed")
+        _report("Winning chain is longer than the fork branch", False, "skipped — one mine failed")
         return
 
     # ---- Step 2: mine a tie-breaker on A ----
@@ -377,7 +379,7 @@ def test_fork_resolution(procs: list) -> None:
     len_a = chain_length(p0)
     _report(
         "Winning chain is longer than the fork branch",
-        len_a >= pre_len + 2,   # mined at least 2 blocks on A
+        len_a >= pre_len + 2,  # mined at least 2 blocks on A
         f"pre={pre_len}  post={len_a}",
     )
 
@@ -385,6 +387,7 @@ def test_fork_resolution(procs: list) -> None:
 # ---------------------------------------------------------------------------
 # Test 3 — Propagation Performance
 # ---------------------------------------------------------------------------
+
 
 def test_propagation_performance(procs: list) -> None:
     """
@@ -478,6 +481,7 @@ def test_propagation_performance(procs: list) -> None:
 # ---------------------------------------------------------------------------
 # Main driver
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     _section("Blockchain Network Failure Simulation")

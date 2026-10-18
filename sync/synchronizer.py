@@ -45,7 +45,7 @@ class Synchronizer:
             if resp.status_code == 200:
                 return resp.json().get("blocks", [])
             if resp.status_code == 404:
-                return None   # endpoint not supported — signal fallback
+                return None  # endpoint not supported — signal fallback
         except requests.RequestException as e:
             logger.warning("incremental fetch from %s failed: %s", peer, e)
         return None
@@ -125,9 +125,7 @@ class Synchronizer:
 
             if new_blocks_raw is None:
                 # Peer does not support incremental endpoint — fall back
-                logger.info(
-                    "peer %s: /blocks/since not available, falling back to full sync", peer
-                )
+                logger.info("peer %s: /blocks/since not available, falling back to full sync", peer)
                 if self.sync_with_peers({peer}):
                     added_any = True
                 continue
@@ -138,7 +136,9 @@ class Synchronizer:
 
             logger.info(
                 "peer %s: %d new block(s) since index %d",
-                peer, len(new_blocks_raw), since_index,
+                peer,
+                len(new_blocks_raw),
+                since_index,
             )
 
             for raw in new_blocks_raw:
