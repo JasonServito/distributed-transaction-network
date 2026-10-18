@@ -6,3 +6,18 @@ line-length = 110
 # Classic ruff default rules (pyflakes + core pycodestyle) plus import sorting.
 # Pinned explicitly so ruff upgrades don't silently widen the rule set.
 select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+    "blockchain",
+    "consensus",
+    "mempool",
+    "network",
+    "sync",
+    "utils",
+    "tests",
+    "main.py",
+    "config.py",
+    "simulate_failures.py",
+]
