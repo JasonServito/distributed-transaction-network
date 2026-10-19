@@ -1,0 +1,5 @@
+# Development and test tools (runtime deps come from requirements.txt)
+-r requirements.txt
+pytest>=8.0.0
+ruff>=0.17.1
+mypy>=2.4.0

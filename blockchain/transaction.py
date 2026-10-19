@@ -4,14 +4,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from utils.logger import get_logger
-from utils.signing import verify, pem_to_public_key
+from utils.signing import pem_to_public_key, verify
 
 logger = get_logger(__name__)
 
 
 @dataclass
 class Transaction:
-    sender: str      # PEM public key, or "COINBASE"
+    sender: str  # PEM public key, or "COINBASE"
     receiver: str
     amount: float
     timestamp: float = field(default_factory=time.time)
@@ -44,6 +44,7 @@ class Transaction:
 
     def sign(self, private_key) -> None:
         from utils.signing import sign as _sign
+
         self.signature = _sign(private_key, self._payload())
 
     def is_valid(self) -> bool:

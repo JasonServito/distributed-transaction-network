@@ -28,9 +28,7 @@ class Block:
             "timestamp": self.timestamp,
             "nonce": self.nonce,
         }
-        return hashlib.sha256(
-            json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def to_dict(self) -> dict:
         return {

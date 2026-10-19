@@ -1,5 +1,7 @@
 # Distributed Transaction Network
 
+[![check](https://github.com/JasonServito/distributed-transaction-network/actions/workflows/check.yml/badge.svg)](https://github.com/JasonServito/distributed-transaction-network/actions/workflows/check.yml)
+
 A small cryptocurrency network you can run on your own machine: several independent servers ("nodes") accept signed payments, bundle them into blocks, and agree on one shared history, even when nodes crash or disagree.
 
 <!-- TODO: add demo -->
@@ -87,8 +89,10 @@ curl http://127.0.0.1:5001/status
 **Tests:**
 
 ```bash
-pytest tests/ -v                 # 35 unit tests (blocks, chain, transactions)
-python simulate_failures.py      # crash recovery, fork resolution, propagation timing (8 checks)
+pip install -r requirements-dev.txt  # adds test tools
+pytest tests/ -v                     # 35 unit tests (blocks, chain, transactions)
+./scripts/check.sh                   # lint, format, type check, unit tests
+python simulate_failures.py --runs 5 # crash recovery, fork resolution, propagation timing (8 checks), repeated
 ```
 
 ## Technical Decisions & Challenges

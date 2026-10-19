@@ -1,13 +1,14 @@
 """Unit tests for Block hashing and serialisation."""
+
 import pytest
 
 from blockchain.block import Block
 from blockchain.transaction import Transaction
 
-
 # ------------------------------------------------------------------ #
 #  Fixtures
 # ------------------------------------------------------------------ #
+
 
 @pytest.fixture
 def simple_block():
@@ -25,6 +26,7 @@ def coinbase_tx():
 # ------------------------------------------------------------------ #
 #  Hash tests
 # ------------------------------------------------------------------ #
+
 
 class TestBlockHashing:
     def test_compute_hash_returns_64_hex_chars(self, simple_block):
@@ -68,6 +70,7 @@ class TestBlockHashing:
 # ------------------------------------------------------------------ #
 #  Serialisation round-trip
 # ------------------------------------------------------------------ #
+
 
 class TestBlockSerialisation:
     def test_to_dict_contains_required_keys(self, simple_block):

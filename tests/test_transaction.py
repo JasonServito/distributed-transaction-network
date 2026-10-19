@@ -1,14 +1,16 @@
 """Unit tests for Transaction signing, verification, and validation."""
+
 import time
+
 import pytest
 
 from blockchain.transaction import Transaction
 from utils.signing import generate_keypair, public_key_to_pem
 
-
 # ------------------------------------------------------------------ #
 #  Fixtures
 # ------------------------------------------------------------------ #
+
 
 @pytest.fixture(scope="module")
 def keypair():
@@ -39,6 +41,7 @@ def signed_tx(keypair, sender_pem):
 #  Coinbase transactions
 # ------------------------------------------------------------------ #
 
+
 class TestCoinbaseTransaction:
     def test_coinbase_is_valid_without_signature(self):
         tx = Transaction(sender="COINBASE", receiver="miner", amount=10.0)
@@ -56,6 +59,7 @@ class TestCoinbaseTransaction:
 # ------------------------------------------------------------------ #
 #  Signed transactions
 # ------------------------------------------------------------------ #
+
 
 class TestSignedTransaction:
     def test_valid_signed_tx_passes_validation(self, signed_tx):
@@ -91,6 +95,7 @@ class TestSignedTransaction:
 # ------------------------------------------------------------------ #
 #  Serialisation
 # ------------------------------------------------------------------ #
+
 
 class TestTransactionSerialisation:
     def test_to_dict_has_required_keys(self, signed_tx):

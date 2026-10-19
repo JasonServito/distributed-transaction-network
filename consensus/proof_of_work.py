@@ -23,7 +23,10 @@ class ProofOfWork:
             block.hash = block.compute_hash()
         logger.info(
             "block %d mined in %.2fs  nonce=%d  hash=%s",
-            block.index, time.time() - start, block.nonce, block.hash,
+            block.index,
+            time.time() - start,
+            block.nonce,
+            block.hash,
         )
         return block
 

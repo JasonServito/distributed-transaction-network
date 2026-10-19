@@ -1,9 +1,9 @@
 """Unit tests for Blockchain chain validation and the longest-chain rule."""
+
 import pytest
 
 from blockchain.block import Block
 from blockchain.chain import Blockchain
-from blockchain.transaction import Transaction
 from consensus.proof_of_work import ProofOfWork
 
 DIFFICULTY = 2  # low difficulty so tests run quickly
@@ -12,6 +12,7 @@ DIFFICULTY = 2  # low difficulty so tests run quickly
 # ------------------------------------------------------------------ #
 #  Helpers
 # ------------------------------------------------------------------ #
+
 
 def _mine_block(chain: Blockchain, transactions=None) -> Block:
     """Mine a valid block and append it to *chain*."""
@@ -28,6 +29,7 @@ def _mine_block(chain: Blockchain, transactions=None) -> Block:
 # ------------------------------------------------------------------ #
 #  Genesis
 # ------------------------------------------------------------------ #
+
 
 class TestGenesis:
     def test_genesis_block_created_on_init(self):
@@ -51,6 +53,7 @@ class TestGenesis:
 # ------------------------------------------------------------------ #
 #  Adding blocks
 # ------------------------------------------------------------------ #
+
 
 class TestAddBlock:
     def test_valid_block_is_accepted(self):
@@ -88,6 +91,7 @@ class TestAddBlock:
 # ------------------------------------------------------------------ #
 #  Chain validation
 # ------------------------------------------------------------------ #
+
 
 class TestChainValidation:
     def test_fresh_chain_is_valid(self):
@@ -127,6 +131,7 @@ class TestChainValidation:
 # ------------------------------------------------------------------ #
 #  Serialisation round-trip
 # ------------------------------------------------------------------ #
+
 
 class TestChainSerialisation:
     def test_round_trip_preserves_length(self):

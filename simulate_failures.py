@@ -17,12 +17,16 @@ distributed-system tests:
 
 Usage
 -----
-    python simulate_failures.py
+    python simulate_failures.py [--runs N]
+
+With --runs N the whole simulation repeats N times (fresh nodes each run) and
+the exit code is 0 only if every run passes every check.
 
 Set DIFFICULTY=1 (default) to keep mining fast during tests.
 Requires: requests  (pip install requests)
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -39,14 +43,14 @@ import requests
 PYTHON = sys.executable
 MAIN_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
 
-DIFFICULTY = 1          # Low difficulty so blocks mine in milliseconds
+DIFFICULTY = 1  # Low difficulty so blocks mine in milliseconds
 PORTS = [5010, 5011, 5012]
 BASE = "http://127.0.0.1"
 
 STARTUP_TIMEOUT = 15.0  # Max seconds to wait for a node to become ready
-PORT_RELEASE_WAIT = 2.0 # Seconds to wait after killing before restarting on the same port
+PORT_RELEASE_WAIT = 2.0  # Seconds to wait after killing before restarting on the same port
 PROPAGATION_WAIT = 4.0  # Seconds to allow block gossip to settle
-SYNC_WAIT = 8.0         # Seconds to wait after restarting a crashed node
+SYNC_WAIT = 8.0  # Seconds to wait after restarting a crashed node
 
 _BASE_ENV = {
     **os.environ,
@@ -60,15 +64,15 @@ _BASE_ENV = {
 # ---------------------------------------------------------------------------
 
 _GREEN = "\033[92m"
-_RED   = "\033[91m"
-_CYAN  = "\033[96m"
-_BOLD  = "\033[1m"
+_RED = "\033[91m"
+_CYAN = "\033[96m"
+_BOLD = "\033[1m"
 _RESET = "\033[0m"
 
 PASS_TAG = f"{_GREEN}PASS{_RESET}"
 FAIL_TAG = f"{_RED}FAIL{_RESET}"
 
-_results: List = []   # list of (name: str, passed: bool, detail: str)
+_results: List = []  # list of (name: str, passed: bool, detail: str)
 
 
 def _report(name: str, passed: bool, detail: str = "") -> None:
@@ -87,6 +91,7 @@ def _section(title: str) -> None:
 # ---------------------------------------------------------------------------
 # Node management
 # ---------------------------------------------------------------------------
+
 
 def _node_env(port: int, seed: str = "") -> dict:
     env = {**_BASE_ENV, "PORT": str(port)}
@@ -110,7 +115,7 @@ def start_node(port: int, seed: str = "") -> subprocess.Popen:
 def kill_node(proc: subprocess.Popen) -> None:
     """Terminate the process and wait for it to fully exit."""
     if proc.poll() is not None:
-        return   # already dead
+        return  # already dead
     proc.terminate()
     try:
         proc.wait(timeout=5)
@@ -149,15 +154,16 @@ def kill_and_wait_port_free(proc: subprocess.Popen, port: int) -> None:
     while time.time() < deadline:
         try:
             requests.get(f"{BASE}:{port}/status", timeout=0.3)
-            time.sleep(0.2)   # port still responding — old process not fully dead
+            time.sleep(0.2)  # port still responding — old process not fully dead
         except requests.RequestException:
-            break              # port is free
-    time.sleep(0.3)            # tiny extra margin for OS to release the socket
+            break  # port is free
+    time.sleep(0.3)  # tiny extra margin for OS to release the socket
 
 
 # ---------------------------------------------------------------------------
 # Chain inspection helpers
 # ---------------------------------------------------------------------------
+
 
 def chain_length(port: int) -> int:
     try:
@@ -229,6 +235,7 @@ def force_sync(port: int, from_port: int) -> None:
 # Test 1 — Crash Recovery
 # ---------------------------------------------------------------------------
 
+
 def test_crash_recovery(procs: list) -> None:
     """
     Scenario
@@ -284,6 +291,7 @@ def test_crash_recovery(procs: list) -> None:
 # Test 2 — Fork Resolution via Concurrent Mining
 # ---------------------------------------------------------------------------
 
+
 def test_fork_resolution(procs: list) -> None:
     """
     Scenario
@@ -311,10 +319,10 @@ def test_fork_resolution(procs: list) -> None:
         if chain_length(port) < 0:
             print(f"  WARN: node :{port} is unreachable — skipping Test 2")
             _report("Both nodes mined a fork block", False, f"node :{port} was down")
-            _report("All nodes converge on the same tip (longest chain wins)", False,
-                    f"node :{port} was down")
-            _report("Winning chain is longer than the fork branch", False,
-                    f"node :{port} was down")
+            _report(
+                "All nodes converge on the same tip (longest chain wins)", False, f"node :{port} was down"
+            )
+            _report("Winning chain is longer than the fork branch", False, f"node :{port} was down")
             return
 
     cross_register(p0, p1, p2)
@@ -344,10 +352,8 @@ def test_fork_resolution(procs: list) -> None:
     _report("Both nodes mined a fork block", a_mined and b_mined)
 
     if not (a_mined and b_mined):
-        _report("All nodes converge on the same tip (longest chain wins)", False,
-                "skipped — one mine failed")
-        _report("Winning chain is longer than the fork branch", False,
-                "skipped — one mine failed")
+        _report("All nodes converge on the same tip (longest chain wins)", False, "skipped — one mine failed")
+        _report("Winning chain is longer than the fork branch", False, "skipped — one mine failed")
         return
 
     # ---- Step 2: mine a tie-breaker on A ----
@@ -377,7 +383,7 @@ def test_fork_resolution(procs: list) -> None:
     len_a = chain_length(p0)
     _report(
         "Winning chain is longer than the fork branch",
-        len_a >= pre_len + 2,   # mined at least 2 blocks on A
+        len_a >= pre_len + 2,  # mined at least 2 blocks on A
         f"pre={pre_len}  post={len_a}",
     )
 
@@ -385,6 +391,7 @@ def test_fork_resolution(procs: list) -> None:
 # ---------------------------------------------------------------------------
 # Test 3 — Propagation Performance
 # ---------------------------------------------------------------------------
+
 
 def test_propagation_performance(procs: list) -> None:
     """
@@ -469,7 +476,7 @@ def test_propagation_performance(procs: list) -> None:
     if propagation_times:
         max_prop = max(propagation_times.values())
         total = time.time() - t_start
-        print(f"\n  Performance summary")
+        print("\n  Performance summary")
         print(f"    Mining time            : {mine_duration:.3f}s")
         print(f"    Max propagation delay  : {max_prop:.3f}s")
         print(f"    Total (mine + sync)    : {total:.3f}s")
@@ -479,11 +486,13 @@ def test_propagation_performance(procs: list) -> None:
 # Main driver
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    _section("Blockchain Network Failure Simulation")
-    print(f"  Difficulty : {DIFFICULTY}")
-    print(f"  Nodes      : {PORTS}")
 
+def run_once() -> List:
+    """Start fresh nodes, run the three tests, shut the nodes down.
+
+    Returns this run's (name, passed, detail) results.
+    """
+    _results.clear()
     procs: list = [None, None, None]
 
     try:
@@ -502,7 +511,8 @@ def main() -> None:
 
         if not all_ready:
             print("\nAborting — one or more nodes did not start in time.")
-            return
+            _report("All nodes start", False, "startup timeout")
+            return list(_results)
 
         cross_register(*PORTS)
         time.sleep(1.0)
@@ -514,21 +524,64 @@ def main() -> None:
 
     finally:
         print("\nShutting down nodes ...")
-        for proc in procs:
+        for proc, port in zip(procs, PORTS):
             if proc is not None:
-                kill_node(proc)
+                kill_and_wait_port_free(proc, port)  # ports are reused by the next run
 
-    # ---- Summary ---------------------------------------------------------
-    _section("Results")
-    passed = sum(1 for _, ok, _ in _results if ok)
-    total = len(_results)
-    for name, ok, detail in _results:
-        tag = PASS_TAG if ok else FAIL_TAG
-        suffix = f"  ({detail})" if detail else ""
-        print(f"  [{tag}] {name}{suffix}")
+    return list(_results)
 
-    print(f"\n  {_BOLD}{passed}/{total} tests passed{_RESET}")
-    sys.exit(0 if passed == total else 1)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the blockchain failure simulation.")
+    parser.add_argument(
+        "--runs", type=int, default=1, metavar="N", help="repeat the whole simulation N times"
+    )
+    args = parser.parse_args()
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
+
+    _section("Blockchain Network Failure Simulation")
+    print(f"  Difficulty : {DIFFICULTY}")
+    print(f"  Nodes      : {PORTS}")
+
+    all_runs: List = []
+    for i in range(1, args.runs + 1):
+        if args.runs > 1:
+            _section(f"Run {i}/{args.runs}")
+        results = run_once()
+        all_runs.append(results)
+        passed = sum(1 for _, ok, _ in results if ok)
+        if args.runs > 1:
+            print(f"\n  {_BOLD}Run {i}/{args.runs}: {passed}/{len(results)} checks passed{_RESET}")
+
+    if args.runs == 1:
+        results = all_runs[0]
+        _section("Results")
+        passed = sum(1 for _, ok, _ in results if ok)
+        total = len(results)
+        for name, ok, detail in results:
+            tag = PASS_TAG if ok else FAIL_TAG
+            suffix = f"  ({detail})" if detail else ""
+            print(f"  [{tag}] {name}{suffix}")
+
+        print(f"\n  {_BOLD}{passed}/{total} tests passed{_RESET}")
+        sys.exit(0 if passed == total else 1)
+
+    # ---- Multi-run summary -----------------------------------------------
+    _section(f"Summary over {args.runs} runs")
+    failures: dict = {}  # check name -> number of runs it failed in
+    clean_runs = 0
+    for results in all_runs:
+        failed = [name for name, ok, _ in results if not ok]
+        if not failed:
+            clean_runs += 1
+        for name in failed:
+            failures[name] = failures.get(name, 0) + 1
+
+    print(f"  {_BOLD}{clean_runs}/{args.runs} runs passed all checks{_RESET}")
+    for name, count in failures.items():
+        print(f"  [{FAIL_TAG}] {name}: failed in {count}/{args.runs} runs")
+    sys.exit(0 if clean_runs == args.runs else 1)
 
 
 if __name__ == "__main__":
