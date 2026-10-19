@@ -120,7 +120,7 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 | B-02 | Add `ruff` (lint + format) via `pyproject.toml`; fix findings | G | `ruff check .` and `ruff format --check .` exit 0 | done |
 | B-03 | Add `mypy` (non-strict) for all packages; fix findings | G | `mypy .` exits 0 | done |
 | B-04 | `scripts/check.sh`: ruff + mypy + pytest | G | One command, non-zero exit on any failure | done |
-| B-05 | GitHub Actions runs `check.sh` on push and PR | G | Green run on a PR; CI badge in README (counts toward the 2-badge max) | doing |
+| B-05 | GitHub Actions runs `check.sh` on push and PR | G | Green run on a PR; CI badge in README (counts toward the 2-badge max) | done |
 | B-06 | `simulate_failures.py --runs N` | G | Prints pass count over N runs and exits non-zero if any run fails | todo |
 
 ### M1 Correct & strict
