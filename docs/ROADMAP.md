@@ -71,7 +71,7 @@ Milestones run **in order, one at a time**. Each ends with a **gate**: the next 
 
 | Milestone | Goal | Gate (must pass to move on) | Status |
 |---|---|---|---|
-| **M0 Guardrails** | One command tells us if anything broke | `scripts/check.sh` passes locally and in CI | doing |
+| **M0 Guardrails** | One command tells us if anything broke | `scripts/check.sh` passes locally and in CI | done |
 | **M1 Correct & strict** | Forks always heal; invalid blocks are always rejected | check.sh green; simulation passes 20/20 runs in a row | todo |
 | **M2 Durable nodes** | Nodes survive a hard kill | `kill -9` + restart test passes with no peers online | todo |
 | **M3 Resilient peers** | No single point of failure; partitions heal by themselves | Simulation passes with `cross_register`/`force_sync` removed, plus a new partition test | todo |
