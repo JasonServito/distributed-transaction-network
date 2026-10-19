@@ -129,7 +129,7 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 | ID | Task | Why | Done when | Status |
 |---|---|---|---|---|
 | B-10 | Reproduce the fork-convergence flake in a deterministic unit test (deliver child before parent) | 4 | The test fails on current code, and the root cause is written in its docstring | done |
-| B-10a | Fork scenario in simulate_failures.py: after the concurrent mine, keep mining on A (max 3 tries) until A is strictly longer than every other node, then check convergence (test-only, node code unchanged) | 4 | `simulate_failures.py --runs 30`: the convergence check never fails from an equal-height tie | todo |
+| B-10a | Fork scenario in simulate_failures.py: after the concurrent mine, keep mining on A (max 3 tries) until A's tip is higher than B's fork block, then check convergence (test-only, node code unchanged) | 4 | `simulate_failures.py --runs 30`: the convergence check never fails from an equal-height tie | done |
 | B-11 | Fetch missing ancestors when a block's parent is unknown: walk back by hash (`GET /blocks/<hash>`, depth limit) | 4 | B-10 passes; `simulate_failures.py --runs 20` → 20/20 | todo |
 | B-12 | Route full sync through `add_block`; no direct `_block_store` writes outside `Blockchain` | 4 | Grep shows no external writes; side branches survive a full sync (test) | todo |
 | B-13 | Reject a block unless `index == parent.index + 1` | 2 | Unit test | todo |
