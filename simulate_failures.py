@@ -17,12 +17,16 @@ distributed-system tests:
 
 Usage
 -----
-    python simulate_failures.py
+    python simulate_failures.py [--runs N]
+
+With --runs N the whole simulation repeats N times (fresh nodes each run) and
+the exit code is 0 only if every run passes every check.
 
 Set DIFFICULTY=1 (default) to keep mining fast during tests.
 Requires: requests  (pip install requests)
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -483,11 +487,12 @@ def test_propagation_performance(procs: list) -> None:
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    _section("Blockchain Network Failure Simulation")
-    print(f"  Difficulty : {DIFFICULTY}")
-    print(f"  Nodes      : {PORTS}")
+def run_once() -> List:
+    """Start fresh nodes, run the three tests, shut the nodes down.
 
+    Returns this run's (name, passed, detail) results.
+    """
+    _results.clear()
     procs: list = [None, None, None]
 
     try:
@@ -506,7 +511,8 @@ def main() -> None:
 
         if not all_ready:
             print("\nAborting — one or more nodes did not start in time.")
-            return
+            _report("All nodes start", False, "startup timeout")
+            return list(_results)
 
         cross_register(*PORTS)
         time.sleep(1.0)
@@ -518,21 +524,64 @@ def main() -> None:
 
     finally:
         print("\nShutting down nodes ...")
-        for proc in procs:
+        for proc, port in zip(procs, PORTS):
             if proc is not None:
-                kill_node(proc)
+                kill_and_wait_port_free(proc, port)  # ports are reused by the next run
 
-    # ---- Summary ---------------------------------------------------------
-    _section("Results")
-    passed = sum(1 for _, ok, _ in _results if ok)
-    total = len(_results)
-    for name, ok, detail in _results:
-        tag = PASS_TAG if ok else FAIL_TAG
-        suffix = f"  ({detail})" if detail else ""
-        print(f"  [{tag}] {name}{suffix}")
+    return list(_results)
 
-    print(f"\n  {_BOLD}{passed}/{total} tests passed{_RESET}")
-    sys.exit(0 if passed == total else 1)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the blockchain failure simulation.")
+    parser.add_argument(
+        "--runs", type=int, default=1, metavar="N", help="repeat the whole simulation N times"
+    )
+    args = parser.parse_args()
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
+
+    _section("Blockchain Network Failure Simulation")
+    print(f"  Difficulty : {DIFFICULTY}")
+    print(f"  Nodes      : {PORTS}")
+
+    all_runs: List = []
+    for i in range(1, args.runs + 1):
+        if args.runs > 1:
+            _section(f"Run {i}/{args.runs}")
+        results = run_once()
+        all_runs.append(results)
+        passed = sum(1 for _, ok, _ in results if ok)
+        if args.runs > 1:
+            print(f"\n  {_BOLD}Run {i}/{args.runs}: {passed}/{len(results)} checks passed{_RESET}")
+
+    if args.runs == 1:
+        results = all_runs[0]
+        _section("Results")
+        passed = sum(1 for _, ok, _ in results if ok)
+        total = len(results)
+        for name, ok, detail in results:
+            tag = PASS_TAG if ok else FAIL_TAG
+            suffix = f"  ({detail})" if detail else ""
+            print(f"  [{tag}] {name}{suffix}")
+
+        print(f"\n  {_BOLD}{passed}/{total} tests passed{_RESET}")
+        sys.exit(0 if passed == total else 1)
+
+    # ---- Multi-run summary -----------------------------------------------
+    _section(f"Summary over {args.runs} runs")
+    failures: dict = {}  # check name -> number of runs it failed in
+    clean_runs = 0
+    for results in all_runs:
+        failed = [name for name, ok, _ in results if not ok]
+        if not failed:
+            clean_runs += 1
+        for name in failed:
+            failures[name] = failures.get(name, 0) + 1
+
+    print(f"  {_BOLD}{clean_runs}/{args.runs} runs passed all checks{_RESET}")
+    for name, count in failures.items():
+        print(f"  [{FAIL_TAG}] {name}: failed in {count}/{args.runs} runs")
+    sys.exit(0 if clean_runs == args.runs else 1)
 
 
 if __name__ == "__main__":
