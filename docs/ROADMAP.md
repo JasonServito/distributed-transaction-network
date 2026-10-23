@@ -136,7 +136,7 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 | B-15 | Validate balances inside a block, applied in order on the parent's state | 2 | Overspending block is rejected (test) | todo |
 | B-16 | Replay protection: tx_id unique within the block and the branch | 2 | Replayed signed tx rejected (test) | todo |
 | B-17 | Mempool subtracts pending spends when admitting a tx | 2 | Two txs that together overspend: second rejected (test) | todo |
-| B-18 | `/mine` returns 409 when its block lands on a side branch | 4 | Test with a concurrent competing block | todo |
+| B-18 | `/mine` returns 409 when its block lands on a side branch | 4 | Test with a concurrent competing block | done |
 | B-19 | Minimal `wallet.py`: `keygen`, `send`, `balance`; nodes can mine to a key file (`MINER_KEY_FILE`) | 1, 5 | Integration test: keygen → mine → send → mine → same balance on all nodes | todo |
 
 ### M2 Durable nodes

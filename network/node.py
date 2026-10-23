@@ -175,6 +175,17 @@ def create_app(cfg: types.ModuleType) -> Flask:
         if not blockchain.add_block(block, cfg.DIFFICULTY):
             return jsonify({"error": "mined block rejected — chain moved on"}), 409
 
+        # add_block also accepts side-branch blocks.  If another block took this
+        # height while we were mining, ours lost the race: keep the pending
+        # transactions, and don't broadcast or count the stale block.
+        if block.hash not in blockchain.get_chain_block_hashes():
+            return jsonify(
+                {
+                    "error": "mined block is on a side branch (another block won the race)",
+                    "block": block.to_dict(),
+                }
+            ), 409
+
         _inc("blocks_mined")
         mempool.remove_transactions([tx.tx_id for tx in pending])
         _broadcast("/blocks/new", block.to_dict())

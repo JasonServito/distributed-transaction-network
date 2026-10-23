@@ -190,11 +190,17 @@ def _blocks_rejected(port: int) -> object:
         return "?"
 
 
-def mine(port: int) -> Optional[dict]:
-    """Trigger /mine and return the response JSON, or None on failure."""
+def mine(port: int, allow_side_branch: bool = False) -> Optional[dict]:
+    """Trigger /mine and return the response JSON, or None on failure.
+
+    With allow_side_branch, a 409 that carries the block also counts: the
+    block was mined, but another block won the race for its height.
+    """
     try:
         r = requests.post(f"{BASE}:{port}/mine", timeout=30)
         if r.status_code == 201:
+            return r.json()
+        if allow_side_branch and r.status_code == 409 and "block" in r.json():
             return r.json()
     except Exception:
         pass
@@ -349,7 +355,8 @@ def test_fork_resolution(procs: list) -> None:
     fork_results: list = [None, None]
 
     def mine_on(port: int, idx: int) -> None:
-        fork_results[idx] = mine(port)
+        # Losing the race (409 with the block) still makes a fork block.
+        fork_results[idx] = mine(port, allow_side_branch=True)
 
     t0 = threading.Thread(target=mine_on, args=(p0, 0), daemon=True)
     t1 = threading.Thread(target=mine_on, args=(p1, 1), daemon=True)

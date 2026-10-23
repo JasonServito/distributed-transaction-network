@@ -20,6 +20,7 @@ from blockchain.transaction import Transaction
 from consensus.proof_of_work import ProofOfWork
 from network.node import create_app
 from sync.synchronizer import Synchronizer
+from utils.signing import generate_keypair, public_key_to_pem
 
 DIFFICULTY = 1
 
@@ -278,3 +279,44 @@ def test_incremental_sync_walks_back_when_our_tip_is_on_another_fork(net):
     assert Synchronizer(ours, DIFFICULTY).sync_incremental({"node-a"}) is True
     assert ours.last_block.hash == a3["hash"]
     assert net.gets == ["/blocks/since/2", f"/blocks/{a2['hash']}", f"/blocks/{a1['hash']}"]
+
+
+# ------------------------------------------------------------------ #
+#  /mine is honest when its block loses a race (B-18)
+# ------------------------------------------------------------------ #
+
+
+def test_mine_returns_409_when_a_competing_block_wins_the_race(net, monkeypatch):
+    private_key, public_key = generate_keypair()
+    wallet = public_key_to_pem(public_key)
+    a = create_app(_cfg(5001)).test_client()
+    b_cfg = _cfg(5002)
+    b_cfg.MINER_ADDRESS = wallet  # B's first reward funds the transaction below
+    b = create_app(b_cfg).test_client()
+    net.clients.update({"node-a": a, "node-b": b})
+
+    funding = _mine(b)
+    assert a.post("/blocks/new", json=funding).status_code == 201
+    tx = Transaction(sender=wallet, receiver="someone", amount=5.0)
+    tx.sign(private_key)
+    assert b.post("/transactions/new", json=tx.to_dict()).status_code == 201  # pending on B only
+    rival = _mine(a)  # height 2; A has no peers, so B hasn't seen it
+    assert b.post("/peers/register", json={"address": "node-a"}).status_code == 200
+
+    real_mine = ProofOfWork.mine
+
+    def mine_while_rival_arrives(pow_engine, block):
+        assert b.post("/blocks/new", json=rival).status_code == 201  # the rival takes height 2 first
+        return real_mine(pow_engine, block)
+
+    monkeypatch.setattr(ProofOfWork, "mine", mine_while_rival_arrives)
+    resp = b.post("/mine")
+
+    assert resp.status_code == 409
+    stale = resp.get_json()["block"]
+    assert (stale["index"], stale["previous_hash"]) == (rival["index"], rival["previous_hash"])
+    assert tx.tx_id in [t["tx_id"] for t in stale["transactions"]]
+    assert _tip(b) == rival["hash"]
+    assert tx.tx_id in [t["tx_id"] for t in b.get("/mempool").get_json()["transactions"]]
+    assert b.get("/metrics").get_json()["blocks_mined"] == 1  # only the funding block
+    assert a.get(f"/blocks/{stale['hash']}").status_code == 404  # never broadcast
