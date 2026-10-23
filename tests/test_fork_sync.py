@@ -40,6 +40,7 @@ class _Transport:
 
     def __init__(self) -> None:
         self.clients: dict = {}
+        self.gets: list = []  # paths requested with GET, in order
 
     def _route(self, url: str):
         host, _, path = url.removeprefix("http://").partition("/")
@@ -49,6 +50,7 @@ class _Transport:
 
     def get(self, url: str, **_kwargs) -> _Response:
         client, path = self._route(url)
+        self.gets.append(path)
         return _Response(client.get(path))
 
     def post(self, url: str, json=None, **_kwargs) -> _Response:
@@ -115,18 +117,14 @@ def _peer_serving(blocks: list):
     return peer.test_client()
 
 
-@pytest.mark.xfail(
-    strict=True, reason="B-11: catch-up fetches by index, so a missing fork parent is never fetched"
-)
 def test_node_on_fork_catches_up_when_child_arrives_before_parent(net):
     """A node on a losing fork receives the winning chain's newest block before its parent.
 
-    Gossip sends each block in its own thread (network/node.py:64), so a child can arrive
-    first; add_block rejects it for an unknown parent (blockchain/chain.py:61). The node then
-    catches up with sync_incremental (network/node.py:152), which asks peers for blocks with
-    index > its own tip index (sync/synchronizer.py:122, network/node.py:191). Its own fork
-    block already fills the parent's index, so the peer returns only the child again, the
-    missing parent is never requested, and the node stays on the shorter fork.
+    Gossip sends each block in its own thread, so a child can arrive first. The node must
+    fetch the missing parent by hash and switch to the longer chain. Before B-11, catch-up
+    only asked peers for blocks with an index above its own tip; its own fork block already
+    filled the parent's index, so the parent was never requested and the node stayed on the
+    shorter fork (B-10).
     """
     a = create_app(_cfg(5001)).test_client()
     b = create_app(_cfg(5002)).test_client()
@@ -202,3 +200,81 @@ def test_full_sync_from_a_shorter_chain_keeps_ours_and_stores_theirs(net):
     assert Synchronizer(ours, DIFFICULTY).sync_with_peers({"peer"}) is False
     assert ours.last_block.hash == b1.hash
     assert ours.has_block(c1.hash)  # kept as a side branch, like any other valid block
+
+
+# ------------------------------------------------------------------ #
+#  Missing ancestors are fetched by hash (B-11)
+# ------------------------------------------------------------------ #
+
+
+def test_get_block_by_hash_serves_main_chain_and_side_branch_blocks(net):
+    a = create_app(_cfg(5001)).test_client()
+    b = create_app(_cfg(5002)).test_client()
+    main = _mine(a)
+    side = _mine(b)  # same height as `main`, so A keeps it as a side branch
+    assert a.post("/blocks/new", json=side).status_code == 201
+    assert _tip(a) == main["hash"]
+
+    for block in (main, side):
+        resp = a.get(f"/blocks/{block['hash']}")
+        assert resp.status_code == 200
+        assert resp.get_json() == block
+    assert a.get(f"/blocks/{'f' * 64}").status_code == 404
+
+
+def test_walk_back_fetches_several_missing_ancestors_by_hash(net):
+    a = create_app(_cfg(5001)).test_client()
+    b = create_app(_cfg(5002)).test_client()
+    net.clients.update({"node-a": a, "node-b": b})
+    _mine(b)  # B's own fork block at height 1
+    a1, a2, a3 = _mine(a), _mine(a), _mine(a)  # A has no peers yet, so B hears nothing
+    assert b.post("/peers/register", json={"address": "node-a"}).status_code == 200
+
+    assert b.post("/blocks/new", json=a3).status_code == 201
+    assert _tip(b) == a3["hash"]
+    assert net.gets == [f"/blocks/{a2['hash']}", f"/blocks/{a1['hash']}"]  # no full sync
+    metrics = b.get("/metrics").get_json()
+    assert (metrics["blocks_received"], metrics["reorgs"], metrics["blocks_rejected"]) == (1, 1, 0)
+
+
+def test_walk_back_deeper_than_the_limit_falls_back_to_full_sync(net, monkeypatch):
+    monkeypatch.setattr(sync_module, "MAX_ANCESTOR_DEPTH", 2)
+    a = create_app(_cfg(5001)).test_client()
+    b = create_app(_cfg(5002)).test_client()
+    net.clients.update({"node-a": a, "node-b": b})
+    a_blocks = [_mine(a) for _ in range(4)]  # B is missing 3 ancestors of the last one
+    assert b.post("/peers/register", json={"address": "node-a"}).status_code == 200
+
+    assert b.post("/blocks/new", json=a_blocks[-1]).status_code == 201
+    assert _tip(b) == a_blocks[-1]["hash"]
+    assert net.gets == [f"/blocks/{a_blocks[2]['hash']}", f"/blocks/{a_blocks[1]['hash']}", "/chain"]
+
+
+def test_invalid_block_with_unknown_parent_is_rejected_without_fetching(net):
+    a = create_app(_cfg(5001)).test_client()
+    b = create_app(_cfg(5002)).test_client()
+    net.clients.update({"node-a": a, "node-b": b})
+    _mine(a)
+    a2 = _mine(a)
+    assert b.post("/peers/register", json={"address": "node-a"}).status_code == 200
+
+    bad = dict(a2, nonce=a2["nonce"] + 1)  # its hash no longer matches: bad proof-of-work
+    assert b.post("/blocks/new", json=bad).status_code == 400
+    assert net.gets == []
+
+
+def test_incremental_sync_walks_back_when_our_tip_is_on_another_fork(net):
+    a = create_app(_cfg(5001)).test_client()
+    net.clients["node-a"] = a
+    a1, a2, a3 = _mine(a), _mine(a), _mine(a)
+
+    ours = Blockchain()
+    x1 = _block_on(ours.last_block)
+    x2 = _block_on(x1)
+    for block in (x1, x2):
+        assert ours.add_block(block, DIFFICULTY)
+
+    # Our tip index is 2, so A sends only a3; its parents a2 and a1 come by hash.
+    assert Synchronizer(ours, DIFFICULTY).sync_incremental({"node-a"}) is True
+    assert ours.last_block.hash == a3["hash"]
+    assert net.gets == ["/blocks/since/2", f"/blocks/{a2['hash']}", f"/blocks/{a1['hash']}"]

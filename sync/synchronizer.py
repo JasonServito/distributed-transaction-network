@@ -10,6 +10,9 @@ logger = get_logger(__name__)
 
 _TIMEOUT = 5
 
+# Most missing ancestors we fetch one by one before falling back to a full sync.
+MAX_ANCESTOR_DEPTH = 50
+
 
 class Synchronizer:
     def __init__(self, blockchain: Blockchain, difficulty: int) -> None:
@@ -48,6 +51,28 @@ class Synchronizer:
                 return None  # endpoint not supported — signal fallback
         except requests.RequestException as e:
             logger.warning("incremental fetch from %s failed: %s", peer, e)
+        return None
+
+    def _fetch_block(self, peer: str, block_hash: str) -> Optional[Block]:
+        """Ask a peer for one block by hash.  None if it doesn't have it or can't be reached."""
+        try:
+            resp = requests.get(f"http://{peer}/blocks/{block_hash}", timeout=_TIMEOUT)
+            if resp.status_code == 200:
+                block = Block.from_dict(resp.json())
+                if block.hash == block_hash:
+                    return block
+        except requests.RequestException as e:
+            logger.warning("could not fetch block %.12s from %s: %s", block_hash, peer, e)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("malformed block from %s: %s", peer, e)
+        return None
+
+    def _fetch_block_from_any(self, peers: set, block_hash: str) -> Optional[Block]:
+        """Try each peer in turn until one has the block."""
+        for peer in list(peers):
+            block = self._fetch_block(peer, block_hash)
+            if block is not None:
+                return block
         return None
 
     # ------------------------------------------------------------------
@@ -107,6 +132,52 @@ class Synchronizer:
         return False
 
     # ------------------------------------------------------------------
+    # Missing ancestors  (walk back by hash)
+    # ------------------------------------------------------------------
+
+    def add_with_ancestors(self, block: Block, peers: set) -> bool:
+        """
+        Add a block whose parent we don't know yet.
+
+        Asks peers for the parent by hash, then for its parent, and so on
+        until we reach a block we already have.  Then adds the fetched
+        ancestors oldest first, and finally *block*, through add_block.
+        Falls back to a full sync when more than MAX_ANCESTOR_DEPTH blocks
+        are missing or no peer has a block we need.
+
+        A block that is invalid on its own (bad PoW or transaction) is
+        rejected before anything is fetched.  Returns True if *block* was
+        accepted.
+        """
+        problem = self.blockchain.check_block(block, self.difficulty)
+        if problem:
+            logger.warning("block %d rejected: %s", block.index, problem)
+            return False
+
+        ancestors: List[Block] = []
+        parent_hash = block.previous_hash
+        while not self.blockchain.has_block(parent_hash):
+            if len(ancestors) == MAX_ANCESTOR_DEPTH:
+                logger.info("block %d: over %d missing ancestors, full sync", block.index, MAX_ANCESTOR_DEPTH)
+                return self._full_sync_then_add(block, peers)
+            parent = self._fetch_block_from_any(peers, parent_hash)
+            if parent is None:
+                logger.info("block %d: no peer has ancestor %.12s, full sync", block.index, parent_hash)
+                return self._full_sync_then_add(block, peers)
+            ancestors.append(parent)
+            parent_hash = parent.previous_hash
+
+        logger.info("block %d: fetched %d missing ancestor(s)", block.index, len(ancestors))
+        for ancestor in reversed(ancestors):
+            if not self.blockchain.add_block(ancestor, self.difficulty):
+                return False
+        return self.blockchain.add_block(block, self.difficulty)
+
+    def _full_sync_then_add(self, block: Block, peers: set) -> bool:
+        self.sync_with_peers(peers)
+        return self.blockchain.add_block(block, self.difficulty)
+
+    # ------------------------------------------------------------------
     # Incremental sync  (normal operation)
     # ------------------------------------------------------------------
 
@@ -153,7 +224,12 @@ class Synchronizer:
                 except (KeyError, TypeError, ValueError) as exc:
                     logger.warning("malformed block from %s: %s", peer, exc)
                     continue
-                if self.blockchain.add_block(block, self.difficulty):
+                if self.blockchain.has_block(block.previous_hash):
+                    added = self.blockchain.add_block(block, self.difficulty)
+                else:
+                    # Parent unknown (e.g. we are on another fork): walk back by hash.
+                    added = self.add_with_ancestors(block, peers)
+                if added:
                     added_any = True
 
         return added_any

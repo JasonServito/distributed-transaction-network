@@ -32,9 +32,9 @@ def create_app(cfg: types.ModuleType) -> Flask:
         "start_time": time.time(),
         "blocks_mined": 0,  # blocks this node successfully mined
         "blocks_received": 0,  # new blocks accepted from peers
-        "blocks_rejected": 0,  # blocks rejected (bad PoW / unknown parent)
+        "blocks_rejected": 0,  # blocks rejected (invalid, or missing parents not found)
         "reorgs": 0,  # chain reorganisations triggered
-        "sync_calls": 0,  # incremental sync rounds initiated
+        "sync_calls": 0,  # catch-up rounds initiated (startup sync, missing parents)
         "tx_submitted": 0,  # transactions accepted into mempool
     }
     _metrics_lock = threading.Lock()
@@ -126,8 +126,17 @@ def create_app(cfg: types.ModuleType) -> Flask:
         if blockchain.has_block(block.hash):
             return jsonify({"message": f"block {block.index} already known"}), 200
 
+        # Taken before any catch-up, so a reorg caused by fetched ancestors is detected too.
         old_chain_hashes = blockchain.get_chain_block_hashes()
-        if blockchain.add_block(block, cfg.DIFFICULTY):
+        if blockchain.has_block(block.previous_hash):
+            accepted = blockchain.add_block(block, cfg.DIFFICULTY)
+        else:
+            # Parent unknown (e.g. it is still in flight, or we are on another fork):
+            # fetch the missing ancestors from peers by hash, then add the block.
+            _inc("sync_calls")
+            accepted = synchronizer.add_with_ancestors(block, peers)
+
+        if accepted:
             _inc("blocks_received")
             # Find blocks that were on the old chain but not the new one (reorg).
             # Their transactions must be returned to the mempool so they are not lost.
@@ -145,12 +154,10 @@ def create_app(cfg: types.ModuleType) -> Flask:
             _broadcast("/blocks/new", block.to_dict())
             return jsonify({"message": f"block {block.index} accepted"}), 201
 
+        # Invalid block, or its ancestors could not be fetched.  Invalid blocks
+        # trigger no fetching, so a bad peer can't make us sync.
         _inc("blocks_rejected")
-        # Block was rejected (unknown parent / bad PoW).  Use incremental sync
-        # to fill any gap rather than re-downloading the whole chain.
-        _inc("sync_calls")
-        replaced = synchronizer.sync_incremental(peers)
-        return jsonify({"error": "block rejected", "chain_replaced": replaced}), 400
+        return jsonify({"error": "block rejected"}), 400
 
     @app.route("/mine", methods=["POST"])
     def mine():
@@ -190,6 +197,19 @@ def create_app(cfg: types.ModuleType) -> Flask:
         """
         blocks = [b.to_dict() for b in blockchain.chain if b.index > since_index]
         return jsonify({"blocks": blocks, "count": len(blocks)}), 200
+
+    @app.route("/blocks/<block_hash>", methods=["GET"])
+    def get_block(block_hash: str):
+        """
+        One block by hash, from the main chain or a side branch (404 if unknown).
+
+        A node that receives a block whose parent it lacks walks back through
+        this endpoint, one ancestor at a time, until it reaches a block it knows.
+        """
+        block = blockchain.get_block_by_hash(block_hash)
+        if block is None:
+            return jsonify({"error": "block not found"}), 404
+        return jsonify(block.to_dict()), 200
 
     @app.route("/status", methods=["GET"])
     def status():
@@ -236,9 +256,9 @@ def create_app(cfg: types.ModuleType) -> Flask:
         uptime_seconds      : seconds since this node process started
         blocks_mined        : blocks this node produced via /mine
         blocks_received     : new blocks accepted from peers via /blocks/new
-        blocks_rejected     : blocks turned away (bad PoW or unknown parent)
+        blocks_rejected     : blocks turned away (invalid, or missing parents not found)
         reorgs              : chain reorganisations (longer fork took over)
-        sync_calls          : incremental sync rounds this node initiated
+        sync_calls          : catch-up rounds this node initiated (startup sync, missing parents)
         tx_submitted        : transactions accepted into the local mempool
         chain_length        : current canonical chain height
         known_blocks_total  : all blocks ever seen (main chain + side branches)

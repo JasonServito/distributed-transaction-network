@@ -1,5 +1,5 @@
 import threading
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from blockchain.block import Block
 from utils.logger import get_logger
@@ -49,12 +49,9 @@ class Blockchain:
         and switches self.chain to the longest valid path.
         """
         with self._lock:
-            if not self._valid_proof(block, difficulty):
-                logger.warning("block %d rejected: bad proof-of-work", block.index)
-                return False
-
-            if not all(tx.is_valid() for tx in block.transactions):
-                logger.warning("block %d rejected: invalid transaction", block.index)
+            problem = self.check_block(block, difficulty)
+            if problem:
+                logger.warning("block %d rejected: %s", block.index, problem)
                 return False
 
             # Accept the block if its parent is known (main chain OR fork pool)
@@ -186,6 +183,18 @@ class Blockchain:
     # ------------------------------------------------------------------
     # Validation helpers
     # ------------------------------------------------------------------
+
+    def check_block(self, block: Block, difficulty: int) -> Optional[str]:
+        """
+        Return why *block* is invalid on its own (without looking at its
+        parent), or None if it is valid.  Lets callers reject a bad block
+        before fetching any of its missing ancestors.
+        """
+        if not self._valid_proof(block, difficulty):
+            return "bad proof-of-work"
+        if not all(tx.is_valid() for tx in block.transactions):
+            return "invalid transaction"
+        return None
 
     @staticmethod
     def _valid_proof(block: Block, difficulty: int) -> bool:
