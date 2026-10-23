@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 def create_app(cfg: types.ModuleType) -> Flask:
     app = Flask(__name__)
 
-    blockchain = Blockchain()
+    blockchain = Blockchain(cfg.MINING_REWARD)
     mempool = Mempool()
     peers: set = set()
     pow_engine = ProofOfWork(cfg.DIFFICULTY)

@@ -29,7 +29,7 @@ Every must-have task below traces back to one of these five outcomes (column **W
 
 **Known gaps, found in the code:**
 
-- **Blocks from peers are under-validated.** `add_block` checks only PoW, signatures, the block index, and that the parent is known ([chain.py](../blockchain/chain.py)). Any COINBASE transaction is valid ([transaction.py:52](../blockchain/transaction.py)), and there is no balance or replay check inside blocks (B-14–B-16).
+- **Blocks from peers are under-validated.** `add_block` checks PoW, signatures, the coinbase, the block index, and that the parent is known ([chain.py](../blockchain/chain.py)), but there is no balance or replay check inside blocks (B-15, B-16).
 - **Mempool isn't cleaned for blocks added by catch-up.** Only the received block's transactions leave the mempool, not those in fetched ancestors or a full sync, so they could be mined again (B-16/B-17).
 - **Dead peers slow catch-up.** The walk-back tries peers in set order, and each dead peer costs a connection attempt per block (M3, B-32).
 - **No persistence.** The chain lives in memory only.
@@ -131,7 +131,7 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 | B-11 | Fetch missing ancestors when a block's parent is unknown: walk back by hash (`GET /blocks/<hash>`, depth limit) | 4 | B-10 passes; `simulate_failures.py --runs 20` → 20/20 | done |
 | B-12 | Route full sync through `add_block`; no direct `_block_store` writes outside `Blockchain` | 4 | Grep shows no external writes; side branches survive a full sync (test) | done |
 | B-13 | Reject a block unless `index == parent.index + 1` | 2 | Unit test | done |
-| B-14 | Coinbase rules: exactly one, first in the block, amount = reward (note: `Transaction.from_dict` coerces amount to float; compare the reward as float) | 2 | Unit tests for each violation | todo |
+| B-14 | Coinbase rules: exactly one, first in the block, amount = reward (note: `Transaction.from_dict` coerces amount to float; compare the reward as float) | 2 | Unit tests for each violation | done |
 | B-15 | Validate balances inside a block, applied in order on the parent's state | 2 | Overspending block is rejected (test) | todo |
 | B-16 | Replay protection: tx_id unique within the block and the branch | 2 | Replayed signed tx rejected (test) | todo |
 | B-17 | Mempool subtracts pending spends when admitting a tx | 2 | Two txs that together overspend: second rejected (test) | todo |

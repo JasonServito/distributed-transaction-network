@@ -320,3 +320,19 @@ def test_mine_returns_409_when_a_competing_block_wins_the_race(net, monkeypatch)
     assert tx.tx_id in [t["tx_id"] for t in b.get("/mempool").get_json()["transactions"]]
     assert b.get("/metrics").get_json()["blocks_mined"] == 1  # only the funding block
     assert a.get(f"/blocks/{stale['hash']}").status_code == 404  # never broadcast
+
+
+# ------------------------------------------------------------------ #
+#  Each node checks coinbases against its configured reward (B-14)
+# ------------------------------------------------------------------ #
+
+
+def test_node_checks_coinbases_against_its_configured_reward(net):
+    a_cfg = _cfg(5001)
+    a_cfg.MINING_REWARD = 25.0
+    a = create_app(a_cfg).test_client()
+    b = create_app(_cfg(5002)).test_client()  # reward 10.0
+
+    block = _mine(a)  # A accepts its own 25-coin coinbase
+    assert b.post("/blocks/new", json=block).status_code == 400
+    assert b.get("/metrics").get_json()["blocks_rejected"] == 1

@@ -8,8 +8,10 @@ logger = get_logger(__name__)
 
 
 class Blockchain:
-    def __init__(self) -> None:
+    def __init__(self, mining_reward: float = 10.0) -> None:
         self._lock = threading.Lock()
+        # What every block's coinbase must pay (the default matches config.MINING_REWARD's).
+        self.mining_reward = float(mining_reward)
         self.chain: List[Block] = []
         # Every valid block we have ever seen, keyed by its hash.
         # This covers both the main chain AND any side-chain / orphan blocks.
@@ -40,7 +42,8 @@ class Blockchain:
 
         A block is accepted when:
           1. Its PoW is valid.
-          2. All its transactions are valid.
+          2. All its transactions are valid, and exactly one is a coinbase:
+             the first, paying the mining reward.
           3. Its parent (previous_hash) is already known — either on the
              main chain or in a side branch.  This allows us to store fork
              blocks rather than discarding them.
@@ -200,6 +203,11 @@ class Blockchain:
             return "bad proof-of-work"
         if not all(tx.is_valid() for tx in block.transactions):
             return "invalid transaction"
+        coinbase_positions = [i for i, tx in enumerate(block.transactions) if tx.sender == "COINBASE"]
+        if coinbase_positions != [0]:
+            return "a block needs exactly one coinbase transaction, and it must be first"
+        if float(block.transactions[0].amount) != self.mining_reward:
+            return f"coinbase pays {block.transactions[0].amount}, not the reward {self.mining_reward}"
         return None
 
     def _check_on_parent(self, block: Block) -> Optional[str]:
@@ -241,9 +249,10 @@ class Blockchain:
         return {"chain": [b.to_dict() for b in self.chain], "length": len(self.chain)}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Blockchain":
+    def from_dict(cls, d: dict, mining_reward: float = 10.0) -> "Blockchain":
         instance = cls.__new__(cls)
         instance._lock = threading.Lock()
+        instance.mining_reward = float(mining_reward)
         instance._block_store = {}
         instance.chain = [Block.from_dict(b) for b in d["chain"]]
         # Rebuild the block store from the flat chain list
