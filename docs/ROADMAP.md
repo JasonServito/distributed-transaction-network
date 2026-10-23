@@ -19,24 +19,24 @@ Show, with evidence anyone can reproduce, that the network keeps **one consisten
 
 Every must-have task below traces back to one of these five outcomes (column **Why**).
 
-## Where we are (verified 2026-10-18)
+## Where we are (verified 2026-10-23)
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | ✅ 35/35 pass |
-| `python simulate_failures.py` (5 runs) | ⚠️ 3 of 5 runs passed all 8 checks. In the other 2, the check "All nodes converge on the same tip" failed: node A ended on a different tip from B and C |
+| `./scripts/check.sh` (ruff, mypy, pytest) | ✅ 45 tests pass |
+| `python simulate_failures.py --runs N` | ✅ 30/30 runs passed all 8 checks (20 by the B-11 bundle + 10 re-run independently). On 2026-10-18, before B-10a/B-11, 2 of 5 runs failed fork convergence |
 | Docker Compose 3-node network | ✅ (verified 2026-10-12) |
 
 **Known gaps, found in the code:**
 
-- **Fork-test flake.** The simulation's tie-breaker sometimes creates an equal-height tie (3/30 runs). Nodes correctly keep the first-seen tip, so the test is wrong, not the nodes (B-10a).
-- **Blocks from peers are under-validated.** `add_block` checks only PoW, signatures, and that the parent is known ([chain.py:37](../blockchain/chain.py)). Any COINBASE transaction is valid ([transaction.py:52](../blockchain/transaction.py)), there is no balance or replay check inside blocks, and the block index isn't checked.
-- **Full sync bypasses the block store.** It overwrites `_block_store` directly, without the lock ([synchronizer.py:96](../sync/synchronizer.py)), and drops side branches.
-- **`/mine` can report success for a block that isn't on the main chain.** `add_block` returns `True` for side-branch blocks, so the 409 at [node.py:168](../network/node.py) never fires.
+- **Blocks from peers are under-validated.** `add_block` checks only PoW, signatures, and that the parent is known ([chain.py](../blockchain/chain.py)). Any COINBASE transaction is valid ([transaction.py:52](../blockchain/transaction.py)), there is no balance or replay check inside blocks, and the block index isn't checked (B-13–B-16).
+- **Mempool isn't cleaned for blocks added by catch-up.** Only the received block's transactions leave the mempool, not those in fetched ancestors or a full sync, so they could be mined again (B-16/B-17).
+- **`/mine` reads the chain length and tip separately, without the lock.** Under concurrency they can disagree; once B-13 checks the index, such a block would be rejected (B-13).
+- **Dead peers slow catch-up.** The walk-back tries peers in set order, and each dead peer costs a connection attempt per block (M3, B-32).
 - **No persistence.** The chain lives in memory only.
 - **One seed node, no peer exchange.** Nodes only learn about peers that register with them, so the simulation calls `cross_register` by hand.
 - **Mining is manual.** It only runs on `POST /mine`.
-- **Flask dev server, no lint/type checks, no CI.** `pytest` is mixed into runtime `requirements.txt`.
+- **Flask dev server.** No production server yet (B-51).
 
 ## Scope
 
