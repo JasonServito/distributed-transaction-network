@@ -165,9 +165,11 @@ def create_app(cfg: types.ModuleType) -> Flask:
         coinbase = Transaction(sender="COINBASE", receiver=cfg.MINER_ADDRESS, amount=cfg.MINING_REWARD)
         transactions = [coinbase] + pending
 
+        # Read the tip once: the chain can change between two separate reads.
+        tip = blockchain.last_block
         block = Block(
-            index=len(blockchain.chain),
-            previous_hash=blockchain.last_block.hash,
+            index=tip.index + 1,
+            previous_hash=tip.hash,
             transactions=transactions,
         )
         pow_engine.mine(block)

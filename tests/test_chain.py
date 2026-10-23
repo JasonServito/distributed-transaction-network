@@ -4,6 +4,7 @@ import pytest
 
 from blockchain.block import Block
 from blockchain.chain import Blockchain
+from blockchain.transaction import Transaction
 from consensus.proof_of_work import ProofOfWork
 
 DIFFICULTY = 2  # low difficulty so tests run quickly
@@ -24,6 +25,20 @@ def _mine_block(chain: Blockchain, transactions=None) -> Block:
     )
     pow_engine.mine(block)
     return block
+
+
+def _coinbase(receiver: str = "miner", amount: float = 10.0) -> Transaction:
+    return Transaction(sender="COINBASE", receiver=receiver, amount=amount)
+
+
+def _block_on(parent: Block, transactions=None, index=None) -> Block:
+    """Mine a block on *parent*: by default the next index, holding just a coinbase."""
+    block = Block(
+        index=parent.index + 1 if index is None else index,
+        previous_hash=parent.hash,
+        transactions=[_coinbase()] if transactions is None else transactions,
+    )
+    return ProofOfWork(DIFFICULTY).mine(block)
 
 
 # ------------------------------------------------------------------ #
@@ -86,6 +101,33 @@ class TestAddBlock:
         if block.hash.startswith("0" * DIFFICULTY):
             pytest.skip("Hash accidentally satisfies PoW — re-run to get a different timestamp.")
         assert bc.add_block(block, DIFFICULTY) is False
+
+
+# ------------------------------------------------------------------ #
+#  Block index (B-13)
+# ------------------------------------------------------------------ #
+
+
+class TestBlockIndex:
+    def test_block_index_must_follow_its_parent(self):
+        bc = Blockchain()
+        genesis = bc.last_block
+        for wrong_index in (0, 2):
+            assert bc.add_block(_block_on(genesis, index=wrong_index), DIFFICULTY) is False
+        assert bc.add_block(_block_on(genesis), DIFFICULTY) is True
+
+    def test_index_rule_holds_on_a_side_branch(self):
+        bc = Blockchain()
+        m1 = _block_on(bc.last_block)
+        m2 = _block_on(m1)
+        for block in (m1, m2):
+            assert bc.add_block(block, DIFFICULTY)
+
+        # A block on m1 follows m1's index, not the main chain tip's.
+        assert bc.add_block(_block_on(m1, index=m2.index + 1), DIFFICULTY) is False
+        side = _block_on(m1)
+        assert bc.add_block(side, DIFFICULTY) is True
+        assert bc.last_block.hash == m2.hash
 
 
 # ------------------------------------------------------------------ #

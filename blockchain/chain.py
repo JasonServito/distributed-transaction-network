@@ -44,6 +44,7 @@ class Blockchain:
           3. Its parent (previous_hash) is already known — either on the
              main chain or in a side branch.  This allows us to store fork
              blocks rather than discarding them.
+          4. It is valid on top of its parent (see _check_on_parent).
 
         After acceptance, _update_main_chain() walks all known branch tips
         and switches self.chain to the longest valid path.
@@ -67,6 +68,11 @@ class Blockchain:
             if block.hash in self._block_store:
                 logger.debug("block %d already known, skipping", block.index)
                 return True
+
+            problem = self._check_on_parent(block)
+            if problem:
+                logger.warning("block %d rejected: %s", block.index, problem)
+                return False
 
             self._block_store[block.hash] = block
             logger.info(
@@ -194,6 +200,18 @@ class Blockchain:
             return "bad proof-of-work"
         if not all(tx.is_valid() for tx in block.transactions):
             return "invalid transaction"
+        return None
+
+    def _check_on_parent(self, block: Block) -> Optional[str]:
+        """
+        Return why *block* is invalid on top of its parent, or None if it is
+        valid.  The rules use the branch the block extends, not the main
+        chain, so valid fork blocks are accepted.  The parent must be known,
+        and the caller holds the lock.
+        """
+        parent = self._block_store[block.previous_hash]
+        if block.index != parent.index + 1:
+            return f"index {block.index} does not follow parent index {parent.index}"
         return None
 
     @staticmethod
