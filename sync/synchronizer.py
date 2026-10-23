@@ -74,27 +74,33 @@ class Synchronizer:
 
     def sync_with_peers(self, peers: set) -> bool:
         """
-        Download and validate the complete chain from every peer, keep the
-        longest valid one.  Used on first boot or as a fallback when
-        incremental sync cannot bridge the gap (e.g. peer is far ahead).
+        Download the complete chain from every peer and feed its blocks,
+        oldest first, through add_block.  Used on first boot or as a fallback
+        when incremental sync cannot bridge the gap (e.g. peer is far ahead).
+
+        add_block validates each block and picks the longest chain, so side
+        branches we already hold are kept, and a peer's chain is not adopted
+        past its first invalid block.  Returns True if our main chain changed.
         """
-        best_chain = None
-        best_length = len(self.blockchain.chain)
+        old_tip = self.blockchain.last_block.hash
 
         for peer in list(peers):
             data = self._fetch_chain(peer)
             if not data:
                 continue
-            candidate = Blockchain.from_dict(data)
-            if len(candidate.chain) > best_length and candidate.is_valid_chain(self.difficulty):
-                best_length = len(candidate.chain)
-                best_chain = candidate
+            for raw in data.get("chain", []):
+                try:
+                    block = Block.from_dict(raw)
+                except (KeyError, TypeError, ValueError) as exc:
+                    logger.warning("malformed block from %s: %s", peer, exc)
+                    break
+                if self.blockchain.has_block(block.hash):
+                    continue  # genesis and blocks we already have
+                if not self.blockchain.add_block(block, self.difficulty):
+                    break  # later blocks build on this one, so stop here
 
-        if best_chain:
-            self.blockchain.chain = best_chain.chain
-            # Rebuild block store so fork logic stays consistent
-            self.blockchain._block_store = {b.hash: b for b in self.blockchain.chain}
-            logger.info("chain replaced via full sync (length=%d)", len(self.blockchain.chain))
+        if self.blockchain.last_block.hash != old_tip:
+            logger.info("main chain changed via full sync (length=%d)", len(self.blockchain))
             return True
 
         logger.info("chain is already up to date")

@@ -1,8 +1,8 @@
-"""Fork healing when a block arrives before its parent (B-10).
+"""Fork healing and catch-up between nodes.
 
-Two real nodes (``create_app``) talk through Flask test clients instead of sockets:
+Real nodes (``create_app``) talk through Flask test clients instead of sockets:
 ``requests`` inside the node and synchronizer modules is swapped for an in-memory
-transport, and gossip threads run inline, so the test is deterministic.
+transport, and gossip threads run inline, so the tests are deterministic.
 """
 
 import threading
@@ -10,10 +10,16 @@ import types
 
 import pytest
 import requests
+from flask import Flask
 
 import network.node as node_module
 import sync.synchronizer as sync_module
+from blockchain.block import Block
+from blockchain.chain import Blockchain
+from blockchain.transaction import Transaction
+from consensus.proof_of_work import ProofOfWork
 from network.node import create_app
+from sync.synchronizer import Synchronizer
 
 DIFFICULTY = 1
 
@@ -92,6 +98,23 @@ def _mine(client) -> dict:
     return resp.get_json()["block"]
 
 
+def _block_on(parent: Block) -> Block:
+    """Mine a block on *parent* (its coinbase tx_id keeps sibling blocks distinct)."""
+    block = Block(
+        index=parent.index + 1,
+        previous_hash=parent.hash,
+        transactions=[Transaction(sender="COINBASE", receiver="miner", amount=10.0)],
+    )
+    return ProofOfWork(DIFFICULTY).mine(block)
+
+
+def _peer_serving(blocks: list):
+    """A stand-in peer that only serves GET /chain, with *blocks* as its main chain."""
+    peer = Flask("peer")
+    peer.add_url_rule("/chain", view_func=lambda: {"chain": [b.to_dict() for b in blocks]})
+    return peer.test_client()
+
+
 @pytest.mark.xfail(
     strict=True, reason="B-11: catch-up fetches by index, so a missing fork parent is never fetched"
 )
@@ -125,3 +148,57 @@ def test_node_on_fork_catches_up_when_child_arrives_before_parent(net):
 
     # B had every chance to catch up from A, so it must now be on A's longer chain.
     assert _tip(b) == _tip(a) == a2["hash"]
+
+
+# ------------------------------------------------------------------ #
+#  Full sync goes through add_block (B-12)
+# ------------------------------------------------------------------ #
+
+
+def test_full_sync_switches_to_a_longer_chain_and_keeps_side_branches(net):
+    ours = Blockchain()
+    genesis = ours.last_block
+    p = _block_on(genesis)
+    b1, a1 = _block_on(p), _block_on(p)
+    for block in (p, b1, a1):
+        assert ours.add_block(block, DIFFICULTY)
+    assert ours.last_block.hash == b1.hash  # a1 is a side branch: same height, seen second
+
+    c1 = _block_on(p)
+    c2 = _block_on(c1)
+    net.clients["peer"] = _peer_serving([genesis, p, c1, c2])
+
+    assert Synchronizer(ours, DIFFICULTY).sync_with_peers({"peer"}) is True
+    assert ours.last_block.hash == c2.hash
+    assert ours.has_block(b1.hash) and ours.has_block(a1.hash)
+    assert ours.known_block_count() == 6
+
+
+def test_full_sync_stops_at_the_first_invalid_block(net):
+    ours = Blockchain()
+    genesis = ours.last_block
+    c1 = _block_on(genesis)
+    c2 = _block_on(c1)
+    c2.nonce += 1  # its hash no longer matches its contents: bad proof-of-work
+    c3 = _block_on(c2)
+    net.clients["peer"] = _peer_serving([genesis, c1, c2, c3])
+
+    assert Synchronizer(ours, DIFFICULTY).sync_with_peers({"peer"}) is True
+    assert ours.last_block.hash == c1.hash
+    assert not ours.has_block(c2.hash) and not ours.has_block(c3.hash)
+
+
+def test_full_sync_from_a_shorter_chain_keeps_ours_and_stores_theirs(net):
+    ours = Blockchain()
+    genesis = ours.last_block
+    p = _block_on(genesis)
+    b1 = _block_on(p)
+    for block in (p, b1):
+        assert ours.add_block(block, DIFFICULTY)
+
+    c1 = _block_on(genesis)
+    net.clients["peer"] = _peer_serving([genesis, c1])
+
+    assert Synchronizer(ours, DIFFICULTY).sync_with_peers({"peer"}) is False
+    assert ours.last_block.hash == b1.hash
+    assert ours.has_block(c1.hash)  # kept as a side branch, like any other valid block

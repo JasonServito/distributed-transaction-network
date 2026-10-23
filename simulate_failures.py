@@ -259,8 +259,8 @@ def test_crash_recovery(procs: list) -> None:
     ---------------
     - A restarting node calls /blocks/since to fetch only the blocks it
       missed (incremental sync) rather than re-downloading the whole chain.
-    - The Blockchain._block_store is correctly rebuilt from the downloaded
-      blocks so subsequent add_block calls work.
+    - Downloaded blocks go through add_block, so the node's block store
+      stays consistent and subsequent add_block calls work.
     """
     _section("Test 1: Crash Recovery")
     p0, p1, p2 = PORTS

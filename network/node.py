@@ -249,7 +249,7 @@ def create_app(cfg: types.ModuleType) -> Flask:
             snapshot = dict(_metrics)
 
         chain_len = len(blockchain.chain)
-        known_total = len(blockchain._block_store)
+        known_total = blockchain.known_block_count()
 
         return jsonify(
             {

@@ -156,6 +156,11 @@ class Blockchain:
         with self._lock:
             return self._block_store.get(block_hash)
 
+    def known_block_count(self) -> int:
+        """Return how many blocks we know: main chain plus side branches."""
+        with self._lock:
+            return len(self._block_store)
+
     def get_chain_block_hashes(self) -> set:
         """Return the set of block hashes currently on the main chain."""
         with self._lock:
