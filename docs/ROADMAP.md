@@ -24,7 +24,7 @@ Every must-have task below traces back to one of these five outcomes (column **W
 | Check | Result |
 |---|---|
 | `./scripts/check.sh` (ruff, mypy, pytest) | ✅ 65 tests pass |
-| `python simulate_failures.py --runs N` | ✅ 30/30 runs passed all 8 checks (20 by the B-11 bundle + 10 re-run independently). On 2026-10-18, before B-10a/B-11, 2 of 5 runs failed fork convergence |
+| `python simulate_failures.py --runs N` | ✅ 30/30 runs passed all 8 checks after B-13–B-17 (20 by the bundle + 10 re-run independently). On 2026-10-18, before B-10a/B-11, 2 of 5 runs failed fork convergence |
 | Docker Compose 3-node network | ✅ (verified 2026-10-12) |
 
 **Known gaps, found in the code:**
