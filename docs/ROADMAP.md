@@ -29,7 +29,6 @@ Every must-have task below traces back to one of these five outcomes (column **W
 
 **Known gaps, found in the code:**
 
-- **Blocks from peers are under-validated.** `add_block` checks PoW, signatures, the coinbase, the block index, balances, and that the parent is known ([chain.py](../blockchain/chain.py)), but there is no replay check inside blocks (B-16).
 - **Mempool isn't cleaned for blocks added by catch-up.** Only the received block's transactions leave the mempool, not those in fetched ancestors or a full sync, so they could be mined again (B-16/B-17).
 - **Dead peers slow catch-up.** The walk-back tries peers in set order, and each dead peer costs a connection attempt per block (M3, B-32).
 - **No persistence.** The chain lives in memory only.
@@ -133,7 +132,7 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 | B-13 | Reject a block unless `index == parent.index + 1` | 2 | Unit test | done |
 | B-14 | Coinbase rules: exactly one, first in the block, amount = reward (note: `Transaction.from_dict` coerces amount to float; compare the reward as float) | 2 | Unit tests for each violation | done |
 | B-15 | Validate balances inside a block, applied in order on the parent's state | 2 | Overspending block is rejected (test) | done |
-| B-16 | Replay protection: tx_id unique within the block and the branch | 2 | Replayed signed tx rejected (test) | todo |
+| B-16 | Replay protection: tx_id unique within the block and the branch | 2 | Replayed signed tx rejected (test) | done |
 | B-17 | Mempool subtracts pending spends when admitting a tx | 2 | Two txs that together overspend: second rejected (test) | todo |
 | B-18 | `/mine` returns 409 when its block lands on a side branch | 4 | Test with a concurrent competing block | done |
 | B-19 | Minimal `wallet.py`: `keygen`, `send`, `balance`; nodes can mine to a key file (`MINER_KEY_FILE`) | 1, 5 | Integration test: keygen → mine → send → mine → same balance on all nodes | todo |

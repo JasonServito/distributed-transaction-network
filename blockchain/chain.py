@@ -1,6 +1,6 @@
 import threading
 from collections import defaultdict
-from typing import DefaultDict, Dict, List, Optional
+from typing import DefaultDict, Dict, List, Optional, Set, Tuple
 
 from blockchain.block import Block
 from blockchain.transaction import Transaction
@@ -222,35 +222,41 @@ class Blockchain:
         parent = self._block_store[block.previous_hash]
         if block.index != parent.index + 1:
             return f"index {block.index} does not follow parent index {parent.index}"
-        balances = self._branch_state(parent.hash)
+        balances, tx_ids = self._branch_state(parent.hash)
         for tx in block.transactions:
-            problem = self._apply(tx, balances)
+            problem = self._apply(tx, balances, tx_ids)
             if problem:
                 return problem
         return None
 
-    def _branch_state(self, tip_hash: str) -> DefaultDict[str, float]:
+    def _branch_state(self, tip_hash: str) -> Tuple[DefaultDict[str, float], Set[str]]:
         """
         Replay the branch from genesis to *tip_hash* into balances per
-        address.  The caller holds the lock.
+        address and the set of tx_ids on it.  The caller holds the lock.
         """
         balances: DefaultDict[str, float] = defaultdict(float)
+        tx_ids: Set[str] = set()
         for block in self._build_chain_to_genesis(tip_hash):
             for tx in block.transactions:
                 balances[tx.receiver] += tx.amount
                 balances[tx.sender] -= tx.amount
-        return balances
+                tx_ids.add(tx.tx_id)
+        return balances, tx_ids
 
     @staticmethod
-    def _apply(tx: Transaction, balances: DefaultDict[str, float]) -> Optional[str]:
+    def _apply(tx: Transaction, balances: DefaultDict[str, float], tx_ids: Set[str]) -> Optional[str]:
         """
-        Apply *tx* to a branch's *balances*, after the transactions before
-        it.  Returns why it can't be applied (changing nothing), or None.
+        Apply *tx* to a branch's *balances* and *tx_ids*, after the
+        transactions before it.  Returns why it can't be applied (changing
+        nothing), or None.
         """
+        if tx.tx_id in tx_ids:
+            return f"tx {tx.tx_id} is already on this branch"
         if tx.sender != "COINBASE" and balances[tx.sender] < tx.amount:
             return f"tx {tx.tx_id} spends {tx.amount} but its sender has {balances[tx.sender]}"
         balances[tx.receiver] += tx.amount
         balances[tx.sender] -= tx.amount
+        tx_ids.add(tx.tx_id)
         return None
 
     @staticmethod

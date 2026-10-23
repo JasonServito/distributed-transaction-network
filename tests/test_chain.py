@@ -228,6 +228,36 @@ class TestBalances:
 
 
 # ------------------------------------------------------------------ #
+#  Replay protection (B-16)
+# ------------------------------------------------------------------ #
+
+
+class TestReplay:
+    def test_confirmed_tx_replayed_in_a_later_block_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        tx = _signed(wallet, 3.0)
+        first = _block_on(funding, [_coinbase(), tx])
+        assert bc.add_block(first, DIFFICULTY)
+        # The wallet could afford it again (7 left), but it's the same signed tx.
+        assert bc.add_block(_block_on(first, [_coinbase(), tx]), DIFFICULTY) is False
+
+    def test_duplicate_tx_id_inside_a_block_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        tx = _signed(wallet, 3.0)
+        assert bc.add_block(_block_on(funding, [_coinbase(), tx, tx]), DIFFICULTY) is False
+
+    def test_same_tx_may_appear_on_two_competing_branches(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        tx = _signed(wallet, 3.0)
+        x1 = _block_on(funding, [_coinbase(), tx])
+        y1 = _block_on(funding, [_coinbase(), tx])
+        y2 = _block_on(y1)
+        for block in (x1, y1, y2):
+            assert bc.add_block(block, DIFFICULTY) is True
+        assert bc.last_block.hash == y2.hash
+
+
+# ------------------------------------------------------------------ #
 #  Chain validation
 # ------------------------------------------------------------------ #
 
