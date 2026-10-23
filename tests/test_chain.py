@@ -184,6 +184,50 @@ class TestCoinbase:
 
 
 # ------------------------------------------------------------------ #
+#  Balances inside a block (B-15)
+# ------------------------------------------------------------------ #
+
+
+def _funded_chain(wallet):
+    """A chain whose block 1 pays the 10-coin reward to *wallet*; returns (chain, block 1)."""
+    bc = Blockchain()
+    funding = _block_on(bc.last_block, [_coinbase(receiver=wallet[1])])
+    assert bc.add_block(funding, DIFFICULTY)
+    return bc, funding
+
+
+class TestBalances:
+    def test_overspend_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        assert bc.add_block(_block_on(funding, [_coinbase(), _signed(wallet, 10.5)]), DIFFICULTY) is False
+        assert bc.add_block(_block_on(funding, [_coinbase(), _signed(wallet, 10.0)]), DIFFICULTY) is True
+
+    def test_txs_that_fit_alone_but_overspend_together_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        block = _block_on(funding, [_coinbase(), _signed(wallet, 6.0), _signed(wallet, 6.0)])
+        assert bc.add_block(block, DIFFICULTY) is False
+
+    def test_miner_can_spend_its_reward_in_the_same_block(self, wallet):
+        bc = Blockchain()
+        block = _block_on(bc.last_block, [_coinbase(receiver=wallet[1]), _signed(wallet, 10.0)])
+        assert bc.add_block(block, DIFFICULTY) is True
+
+    def test_balances_come_from_the_branch_the_block_extends(self, wallet):
+        bc = Blockchain()
+        genesis = bc.last_block
+        m1 = _block_on(genesis)
+        m2 = _block_on(m1)
+        side = _block_on(genesis, [_coinbase(receiver=wallet[1])])  # only this branch funds the wallet
+        for block in (m1, m2, side):
+            assert bc.add_block(block, DIFFICULTY)
+        assert bc.last_block.hash == m2.hash
+        assert bc.get_balance(wallet[1]) == 0.0
+
+        assert bc.add_block(_block_on(side, [_coinbase(), _signed(wallet, 5.0)]), DIFFICULTY) is True
+        assert bc.add_block(_block_on(m2, [_coinbase(), _signed(wallet, 5.0)]), DIFFICULTY) is False
+
+
+# ------------------------------------------------------------------ #
 #  Chain validation
 # ------------------------------------------------------------------ #
 

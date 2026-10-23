@@ -1,7 +1,9 @@
 import threading
-from typing import Dict, List, Optional
+from collections import defaultdict
+from typing import DefaultDict, Dict, List, Optional
 
 from blockchain.block import Block
+from blockchain.transaction import Transaction
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -220,6 +222,35 @@ class Blockchain:
         parent = self._block_store[block.previous_hash]
         if block.index != parent.index + 1:
             return f"index {block.index} does not follow parent index {parent.index}"
+        balances = self._branch_state(parent.hash)
+        for tx in block.transactions:
+            problem = self._apply(tx, balances)
+            if problem:
+                return problem
+        return None
+
+    def _branch_state(self, tip_hash: str) -> DefaultDict[str, float]:
+        """
+        Replay the branch from genesis to *tip_hash* into balances per
+        address.  The caller holds the lock.
+        """
+        balances: DefaultDict[str, float] = defaultdict(float)
+        for block in self._build_chain_to_genesis(tip_hash):
+            for tx in block.transactions:
+                balances[tx.receiver] += tx.amount
+                balances[tx.sender] -= tx.amount
+        return balances
+
+    @staticmethod
+    def _apply(tx: Transaction, balances: DefaultDict[str, float]) -> Optional[str]:
+        """
+        Apply *tx* to a branch's *balances*, after the transactions before
+        it.  Returns why it can't be applied (changing nothing), or None.
+        """
+        if tx.sender != "COINBASE" and balances[tx.sender] < tx.amount:
+            return f"tx {tx.tx_id} spends {tx.amount} but its sender has {balances[tx.sender]}"
+        balances[tx.receiver] += tx.amount
+        balances[tx.sender] -= tx.amount
         return None
 
     @staticmethod
