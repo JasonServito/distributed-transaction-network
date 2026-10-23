@@ -23,13 +23,12 @@ Every must-have task below traces back to one of these five outcomes (column **W
 
 | Check | Result |
 |---|---|
-| `./scripts/check.sh` (ruff, mypy, pytest) | ✅ 45 tests pass |
+| `./scripts/check.sh` (ruff, mypy, pytest) | ✅ 65 tests pass |
 | `python simulate_failures.py --runs N` | ✅ 30/30 runs passed all 8 checks (20 by the B-11 bundle + 10 re-run independently). On 2026-10-18, before B-10a/B-11, 2 of 5 runs failed fork convergence |
 | Docker Compose 3-node network | ✅ (verified 2026-10-12) |
 
 **Known gaps, found in the code:**
 
-- **Mempool isn't cleaned for blocks added by catch-up.** Only the received block's transactions leave the mempool, not those in fetched ancestors or a full sync, so they could be mined again (B-16/B-17).
 - **Dead peers slow catch-up.** The walk-back tries peers in set order, and each dead peer costs a connection attempt per block (M3, B-32).
 - **No persistence.** The chain lives in memory only.
 - **One seed node, no peer exchange.** Nodes only learn about peers that register with them, so the simulation calls `cross_register` by hand.
@@ -133,7 +132,7 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 | B-14 | Coinbase rules: exactly one, first in the block, amount = reward (note: `Transaction.from_dict` coerces amount to float; compare the reward as float) | 2 | Unit tests for each violation | done |
 | B-15 | Validate balances inside a block, applied in order on the parent's state | 2 | Overspending block is rejected (test) | done |
 | B-16 | Replay protection: tx_id unique within the block and the branch | 2 | Replayed signed tx rejected (test) | done |
-| B-17 | Mempool subtracts pending spends when admitting a tx | 2 | Two txs that together overspend: second rejected (test) | todo |
+| B-17 | Mempool subtracts pending spends when admitting a tx | 2 | Two txs that together overspend: second rejected (test) | done |
 | B-18 | `/mine` returns 409 when its block lands on a side branch | 4 | Test with a concurrent competing block | done |
 | B-19 | Minimal `wallet.py`: `keygen`, `send`, `balance`; nodes can mine to a key file (`MINER_KEY_FILE`) | 1, 5 | Integration test: keygen → mine → send → mine → same balance on all nodes | todo |
 

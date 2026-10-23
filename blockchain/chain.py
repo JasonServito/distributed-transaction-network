@@ -174,6 +174,11 @@ class Blockchain:
         with self._lock:
             return {b.hash for b in self.chain}
 
+    def get_chain_tx_ids(self) -> set:
+        """Return the set of tx_ids currently on the main chain."""
+        with self._lock:
+            return {tx.tx_id for b in self.chain for tx in b.transactions}
+
     def get_balance(self, address: str) -> float:
         """
         Compute the confirmed balance for *address* by scanning the main chain.
@@ -190,6 +195,24 @@ class Blockchain:
                     if tx.sender == address:
                         balance -= tx.amount
             return balance
+
+    def select_transactions(
+        self, parent_hash: str, coinbase: Transaction, pending: List[Transaction]
+    ) -> List[Transaction]:
+        """
+        Pick the transactions for a new block on *parent_hash*: *coinbase*,
+        then each pending tx that is valid after the ones before it.  Skips
+        any that is a coinbase, already on that branch, or not affordable,
+        so add_block won't reject the block because of them.
+        """
+        with self._lock:
+            balances, tx_ids = self._branch_state(parent_hash)
+            self._apply(coinbase, balances, tx_ids)
+            selected = [coinbase]
+            for tx in pending:
+                if tx.sender != "COINBASE" and self._apply(tx, balances, tx_ids) is None:
+                    selected.append(tx)
+            return selected
 
     # ------------------------------------------------------------------
     # Validation helpers

@@ -336,3 +336,118 @@ def test_node_checks_coinbases_against_its_configured_reward(net):
     block = _mine(a)  # A accepts its own 25-coin coinbase
     assert b.post("/blocks/new", json=block).status_code == 400
     assert b.get("/metrics").get_json()["blocks_rejected"] == 1
+
+
+# ------------------------------------------------------------------ #
+#  Mempool admission and cleanup (B-17)
+# ------------------------------------------------------------------ #
+
+
+def _new_wallet():
+    """A key pair: (private key, address)."""
+    private_key, public_key = generate_keypair()
+    return private_key, public_key_to_pem(public_key)
+
+
+def _pay(wallet, amount: float) -> dict:
+    """A signed transaction from *wallet*, as the JSON a client would submit."""
+    private_key, address = wallet
+    tx = Transaction(sender=address, receiver="someone", amount=amount)
+    tx.sign(private_key)
+    return tx.to_dict()
+
+
+def _node_mining_to(port: int, address: str):
+    cfg = _cfg(port)
+    cfg.MINER_ADDRESS = address  # type: ignore[attr-defined]
+    return create_app(cfg).test_client()
+
+
+def _pending_ids(client) -> list:
+    return [t["tx_id"] for t in client.get("/mempool").get_json()["transactions"]]
+
+
+def test_tx_that_overspends_with_pending_ones_is_rejected(net):
+    wallet = _new_wallet()
+    a = _node_mining_to(5001, wallet[1])
+    _mine(a)  # the wallet has 10
+
+    assert a.post("/transactions/new", json=_pay(wallet, 6.0)).status_code == 201
+    resp = a.post("/transactions/new", json=_pay(wallet, 6.0))  # 6 of the 10 are already pending
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "insufficient balance"
+
+
+def test_confirmed_tx_resubmitted_is_rejected(net):
+    wallet = _new_wallet()
+    a = _node_mining_to(5001, wallet[1])
+    _mine(a)
+    tx = _pay(wallet, 5.0)
+    assert a.post("/transactions/new", json=tx).status_code == 201
+    _mine(a)  # confirms tx; the wallet, also the miner, can still afford it
+
+    resp = a.post("/transactions/new", json=tx)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "transaction already confirmed"
+    assert _pending_ids(a) == []
+
+
+def test_txs_in_ancestors_fetched_by_walk_back_leave_the_mempool(net):
+    wallet = _new_wallet()
+    a = _node_mining_to(5001, wallet[1])
+    b = create_app(_cfg(5002)).test_client()
+    net.clients.update({"node-a": a, "node-b": b})
+    funding = _mine(a)
+    assert b.post("/blocks/new", json=funding).status_code == 201
+    tx = _pay(wallet, 5.0)
+    for node in (a, b):
+        assert node.post("/transactions/new", json=tx).status_code == 201
+
+    a2, a3 = _mine(a), _mine(a)  # A has no peers, so B hears nothing
+    assert tx["tx_id"] in [t["tx_id"] for t in a2["transactions"]]
+    assert b.post("/peers/register", json={"address": "node-a"}).status_code == 200
+    assert b.post("/blocks/new", json=a3).status_code == 201  # a2 comes by walk-back
+
+    assert _tip(b) == a3["hash"]
+    assert _pending_ids(b) == []
+
+
+def test_reorg_does_not_return_txs_that_are_on_the_new_main_chain(net):
+    wallet = _new_wallet()
+    funding = _mine(_node_mining_to(5003, wallet[1]))
+    a = create_app(_cfg(5001)).test_client()
+    b = create_app(_cfg(5002)).test_client()
+    tx = _pay(wallet, 5.0)
+    for node in (a, b):
+        assert node.post("/blocks/new", json=funding).status_code == 201
+        assert node.post("/transactions/new", json=tx).status_code == 201
+
+    _mine(b)  # B confirms tx on its own branch
+    a_blocks = [_mine(a) for _ in range(2)]  # A confirms it too, in its first block
+    for block in a_blocks:
+        assert b.post("/blocks/new", json=block).status_code == 201
+
+    assert _tip(b) == a_blocks[-1]["hash"]  # B's block left the main chain
+    assert _pending_ids(b) == []
+
+
+def test_mine_skips_and_evicts_an_unaffordable_pending_tx(net):
+    wallet = _new_wallet()
+    funding = _mine(_node_mining_to(5003, wallet[1]))
+    a = create_app(_cfg(5001)).test_client()
+    b = create_app(_cfg(5002)).test_client()
+    assert b.post("/blocks/new", json=funding).status_code == 201
+    tx = _pay(wallet, 5.0)
+    assert b.post("/transactions/new", json=tx).status_code == 201
+    _mine(b)  # confirms tx on the only branch that funds the wallet
+
+    a_blocks = [_mine(a) for _ in range(3)]  # longer, and never funds the wallet
+    for block in a_blocks:
+        assert b.post("/blocks/new", json=block).status_code == 201
+    assert _tip(b) == a_blocks[-1]["hash"]
+    assert _pending_ids(b) == [tx["tx_id"]]  # back from the orphaned block, now unaffordable
+
+    mined = _mine(b)
+    assert [t["sender"] for t in mined["transactions"]] == ["COINBASE"]
+    assert _pending_ids(b) == []
+    assert a.post("/blocks/new", json=mined).status_code == 201  # valid for other nodes too

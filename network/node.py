@@ -43,6 +43,26 @@ def create_app(cfg: types.ModuleType) -> Flask:
         with _metrics_lock:
             _metrics[key] += amount
 
+    def _update_mempool(old_chain_hashes: set) -> None:
+        """
+        Bring the mempool in line with the main chain after it changed.
+        Transactions from blocks that left the main chain (a reorg) go back
+        to the mempool so they are not lost; every transaction now on the
+        main chain is removed, so it is not mined again.
+        """
+        confirmed = blockchain.get_chain_tx_ids()
+        orphaned_hashes = old_chain_hashes - blockchain.get_chain_block_hashes()
+        if orphaned_hashes:
+            _inc("reorgs")
+            logger.info("reorg: %d block(s) left the main chain", len(orphaned_hashes))
+            for h in orphaned_hashes:
+                orphaned = blockchain.get_block_by_hash(h)
+                if orphaned:
+                    for tx in orphaned.transactions:
+                        if tx.sender != "COINBASE" and tx.tx_id not in confirmed:
+                            mempool.add_transaction(tx)
+        mempool.remove_transactions(confirmed)
+
     if cfg.SEED_PEER:
         seed = cfg.SEED_PEER.strip()
         peers.add(seed)
@@ -50,8 +70,10 @@ def create_app(cfg: types.ModuleType) -> Flask:
         # Use incremental sync on start-up: ask for only the blocks we lack.
         # Falls back to full sync automatically when the peer's chain is large
         # and the /blocks/since endpoint returns many results.
+        old_chain_hashes = blockchain.get_chain_block_hashes()
         synchronizer.sync_incremental(peers)
         _inc("sync_calls")
+        _update_mempool(old_chain_hashes)
 
     def _broadcast(endpoint: str, payload: dict) -> None:
         def _send(peer: str) -> None:
@@ -94,13 +116,20 @@ def create_app(cfg: types.ModuleType) -> Flask:
             tx = Transaction.from_dict(data)
         except (KeyError, TypeError, ValueError) as e:
             return jsonify({"error": str(e)}), 400
+        if mempool.has_transaction(tx.tx_id):
+            return jsonify({"error": "transaction already pending"}), 400
+        if tx.tx_id in blockchain.get_chain_tx_ids():
+            return jsonify({"error": "transaction already confirmed"}), 400
         if tx.sender != "COINBASE":
+            # The sender's pending transactions already spend part of the balance.
             balance = blockchain.get_balance(tx.sender)
-            if balance < tx.amount:
+            pending = mempool.pending_spend(tx.sender)
+            if balance - pending < tx.amount:
                 return jsonify(
                     {
                         "error": "insufficient balance",
                         "balance": round(balance, 8),
+                        "pending": round(pending, 8),
                         "required": tx.amount,
                     }
                 ), 400
@@ -135,22 +164,11 @@ def create_app(cfg: types.ModuleType) -> Flask:
             # fetch the missing ancestors from peers by hash, then add the block.
             _inc("sync_calls")
             accepted = synchronizer.add_with_ancestors(block, peers)
+        # Catch-up can change the main chain even when *block* itself is rejected.
+        _update_mempool(old_chain_hashes)
 
         if accepted:
             _inc("blocks_received")
-            # Find blocks that were on the old chain but not the new one (reorg).
-            # Their transactions must be returned to the mempool so they are not lost.
-            orphaned_hashes = old_chain_hashes - blockchain.get_chain_block_hashes()
-            if orphaned_hashes:
-                _inc("reorgs")
-                logger.info("reorg: %d block(s) orphaned after block %d", len(orphaned_hashes), block.index)
-                for h in orphaned_hashes:
-                    orphaned = blockchain.get_block_by_hash(h)
-                    if orphaned:
-                        for tx in orphaned.transactions:
-                            if tx.sender != "COINBASE":
-                                mempool.add_transaction(tx)
-            mempool.remove_transactions([tx.tx_id for tx in block.transactions if tx.sender != "COINBASE"])
             _broadcast("/blocks/new", block.to_dict())
             return jsonify({"message": f"block {block.index} accepted"}), 201
 
@@ -161,12 +179,16 @@ def create_app(cfg: types.ModuleType) -> Flask:
 
     @app.route("/mine", methods=["POST"])
     def mine():
-        pending = mempool.get_transactions(limit=10)
-        coinbase = Transaction(sender="COINBASE", receiver=cfg.MINER_ADDRESS, amount=cfg.MINING_REWARD)
-        transactions = [coinbase] + pending
-
         # Read the tip once: the chain can change between two separate reads.
         tip = blockchain.last_block
+        pending = mempool.get_transactions(limit=10)
+        coinbase = Transaction(sender="COINBASE", receiver=cfg.MINER_ADDRESS, amount=cfg.MINING_REWARD)
+        transactions = blockchain.select_transactions(tip.hash, coinbase, pending)
+        # A pending tx that can't go on the tip (already confirmed, not affordable, or a
+        # coinbase) would make the block invalid, so drop it from the mempool.
+        selected = {tx.tx_id for tx in transactions}
+        mempool.remove_transactions([tx.tx_id for tx in pending if tx.tx_id not in selected])
+
         block = Block(
             index=tip.index + 1,
             previous_hash=tip.hash,
@@ -174,6 +196,7 @@ def create_app(cfg: types.ModuleType) -> Flask:
         )
         pow_engine.mine(block)
 
+        old_chain_hashes = blockchain.get_chain_block_hashes()
         if not blockchain.add_block(block, cfg.DIFFICULTY):
             return jsonify({"error": "mined block rejected — chain moved on"}), 409
 
@@ -189,7 +212,7 @@ def create_app(cfg: types.ModuleType) -> Flask:
             ), 409
 
         _inc("blocks_mined")
-        mempool.remove_transactions([tx.tx_id for tx in pending])
+        _update_mempool(old_chain_hashes)
         _broadcast("/blocks/new", block.to_dict())
         return jsonify({"block": block.to_dict()}), 201
 

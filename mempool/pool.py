@@ -1,5 +1,5 @@
 import threading
-from typing import List
+from typing import Iterable, List
 
 from blockchain.transaction import Transaction
 from utils.logger import get_logger
@@ -23,7 +23,7 @@ class Mempool:
             logger.info("tx %s added (mempool size=%d)", tx.tx_id, len(self._pool))
             return True
 
-    def remove_transactions(self, tx_ids: List[str]) -> None:
+    def remove_transactions(self, tx_ids: Iterable[str]) -> None:
         with self._lock:
             for tx_id in tx_ids:
                 self._pool.pop(tx_id, None)
@@ -31,6 +31,11 @@ class Mempool:
     def get_transactions(self, limit: int = 10) -> List[Transaction]:
         with self._lock:
             return list(self._pool.values())[:limit]
+
+    def pending_spend(self, sender: str) -> float:
+        """Total that *sender* spends in pending transactions."""
+        with self._lock:
+            return sum(tx.amount for tx in self._pool.values() if tx.sender == sender)
 
     def size(self) -> int:
         with self._lock:
