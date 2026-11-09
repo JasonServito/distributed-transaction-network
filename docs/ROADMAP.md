@@ -19,12 +19,12 @@ Show, with evidence anyone can reproduce, that the network keeps **one consisten
 
 Every must-have task below traces back to one of these five outcomes (column **Why**).
 
-## Where we are (verified 2026-10-23)
+## Where we are (verified 2026-11-09)
 
 | Check | Result |
 |---|---|
 | `./scripts/check.sh` (ruff, mypy, pytest) | ✅ 71 tests pass |
-| `python simulate_failures.py --runs N` | ✅ 30/30 runs passed all 8 checks after B-13–B-17 (20 by the bundle + 10 re-run independently). On 2026-10-18, before B-10a/B-11, 2 of 5 runs failed fork convergence |
+| `python simulate_failures.py --runs N` | ✅ 20/20 runs passed all 8 checks at the end of M1 (M1 gate). On 2026-10-18, before B-10a/B-11, 2 of 5 runs failed fork convergence |
 | Docker Compose 3-node network | ✅ (verified 2026-10-12) |
 
 **Known gaps, found in the code:**
@@ -48,6 +48,8 @@ Every must-have task below traces back to one of these five outcomes (column **W
 | Deploy on 3+ machines | Faster tip lookup (`_find_tips` scans every block) | |
 | 4 experiments + README results | Property-based tests | |
 | | Narrow blind `except Exception` blocks (`signing.py`, `transaction.py`, simulation); stricter ruff rules | |
+| | `Transaction` stores amount as float (int amounts sign as "4" but verify as "4.0"); clearer bad-signature error; `wallet.py keygen` rejects names with path separators | |
+| | Move the multi-node test harness into `tests/conftest.py`; split wallet tests into their own file | |
 
 **Rule:** a new idea goes into **Later** by default. It moves to Must-have only if it's needed for one of the five outcomes.
 
@@ -69,7 +71,7 @@ Milestones run **in order, one at a time**. Each ends with a **gate**: the next 
 | Milestone | Goal | Gate (must pass to move on) | Status |
 |---|---|---|---|
 | **M0 Guardrails** | One command tells us if anything broke | `scripts/check.sh` passes locally and in CI | done |
-| **M1 Correct & strict** | Forks always heal; invalid blocks are always rejected | check.sh green; simulation passes 20/20 runs in a row | doing |
+| **M1 Correct & strict** | Forks always heal; invalid blocks are always rejected | check.sh green; simulation passes 20/20 runs in a row | done |
 | **M2 Durable nodes** | Nodes survive a hard kill | `kill -9` + restart test passes with no peers online | todo |
 | **M3 Resilient peers** | No single point of failure; partitions heal by themselves | Simulation passes with `cross_register`/`force_sync` removed, plus a new partition test | todo |
 | **M4 Live mining** | The network runs on its own, like a real one | 3 auto-mining nodes stay converged for 10 min locally | todo |
