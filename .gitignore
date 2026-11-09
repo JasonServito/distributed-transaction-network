@@ -4,6 +4,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+wallets/
+*.key
 *.egg-info/
 dist/
 build/

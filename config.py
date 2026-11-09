@@ -22,3 +22,7 @@ MINING_REWARD: float = float(os.getenv("MINING_REWARD", "10.0"))
 
 # Address (public key PEM or label) that receives the mining reward
 MINER_ADDRESS: str = os.getenv("MINER_ADDRESS", "miner_default")
+
+# Optional wallet public key file (from `python wallet.py keygen NAME`).
+# If set, mining rewards go to that wallet instead of MINER_ADDRESS.
+MINER_PUBKEY_FILE: str = os.getenv("MINER_PUBKEY_FILE", "")

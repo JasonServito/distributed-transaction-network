@@ -20,4 +20,5 @@ files = [
     "main.py",
     "config.py",
     "simulate_failures.py",
+    "wallet.py",
 ]

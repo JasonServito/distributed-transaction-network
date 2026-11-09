@@ -1,8 +1,8 @@
 """Fork healing and catch-up between nodes.
 
 Real nodes (``create_app``) talk through Flask test clients instead of sockets:
-``requests`` inside the node and synchronizer modules is swapped for an in-memory
-transport, and gossip threads run inline, so the tests are deterministic.
+``requests`` inside the node, synchronizer and wallet modules is swapped for an
+in-memory transport, and gossip threads run inline, so the tests are deterministic.
 """
 
 import threading
@@ -14,6 +14,7 @@ from flask import Flask
 
 import network.node as node_module
 import sync.synchronizer as sync_module
+import wallet as wallet_module
 from blockchain.block import Block
 from blockchain.chain import Blockchain
 from blockchain.transaction import Transaction
@@ -50,10 +51,10 @@ class _Transport:
             raise requests.ConnectionError(f"no such node: {host}")
         return self.clients[host], "/" + path
 
-    def get(self, url: str, **_kwargs) -> _Response:
+    def get(self, url: str, params=None, **_kwargs) -> _Response:
         client, path = self._route(url)
         self.gets.append(path)
-        return _Response(client.get(path))
+        return _Response(client.get(path, query_string=params))
 
     def post(self, url: str, json=None, **_kwargs) -> _Response:
         client, path = self._route(url)
@@ -78,6 +79,7 @@ def _cfg(port: int) -> types.ModuleType:
     cfg.HOST_ADDR = "127.0.0.1"  # type: ignore[attr-defined]
     cfg.PORT = port  # type: ignore[attr-defined]
     cfg.MINER_ADDRESS = f"miner_{port}"  # type: ignore[attr-defined]
+    cfg.MINER_PUBKEY_FILE = ""  # type: ignore[attr-defined]
     cfg.MINING_REWARD = 10.0  # type: ignore[attr-defined]
     return cfg
 
@@ -87,6 +89,7 @@ def net(monkeypatch):
     transport = _Transport()
     monkeypatch.setattr(node_module, "requests", transport)
     monkeypatch.setattr(sync_module, "requests", transport)
+    monkeypatch.setattr(wallet_module, "requests", transport)
     monkeypatch.setattr(
         node_module, "threading", types.SimpleNamespace(Thread=_InlineThread, Lock=threading.Lock)
     )
@@ -474,3 +477,104 @@ def test_coinbase_tx_submitted_by_a_client_is_rejected_and_not_relayed(net):
     assert _pending_ids(a) == []
     assert net.posts == []  # not gossiped to B
     assert a.get("/metrics").get_json()["tx_submitted"] == 0
+
+
+# ------------------------------------------------------------------ #
+#  Wallet CLI and mining to a wallet (B-19)
+# ------------------------------------------------------------------ #
+
+
+def _keygen(tmp_path, name: str) -> tuple:
+    """(key file, pub file) of a new wallet, as the strings a CLI user would pass."""
+    key_file, pub_file = wallet_module.keygen(name, str(tmp_path))
+    return str(key_file), str(pub_file)
+
+
+def _node_mining_to_wallet(port: int, pub_file: str):
+    cfg = _cfg(port)
+    cfg.MINER_PUBKEY_FILE = pub_file  # type: ignore[attr-defined]
+    return create_app(cfg).test_client()
+
+
+def test_wallet_payment_gives_the_same_balances_on_every_node(net, tmp_path):
+    alice_key, alice_pub = _keygen(tmp_path, "alice")
+    _, bob_pub = _keygen(tmp_path, "bob")
+    nodes = {
+        "node-a": _node_mining_to_wallet(5001, alice_pub),
+        "node-b": create_app(_cfg(5002)).test_client(),
+        "node-c": create_app(_cfg(5003)).test_client(),
+    }
+    net.clients.update(nodes)
+    for name, client in nodes.items():
+        for other in nodes.keys() - {name}:
+            assert client.post("/peers/register", json={"address": other}).status_code == 200
+
+    _mine(nodes["node-a"])
+    _mine(nodes["node-a"])  # alice has two rewards
+    tx_id = wallet_module.send(alice_key, bob_pub, 4, node="node-a")  # an int amount must sign correctly
+    mined = _mine(nodes["node-b"])  # another node confirms the payment
+
+    assert tx_id in [t["tx_id"] for t in mined["transactions"]]
+    alice, bob = wallet_module.read_address(alice_pub), wallet_module.read_address(bob_pub)
+    for name, client in nodes.items():
+        assert wallet_module.balance(alice, name) == 16.0  # 2 x 10 - 4
+        assert wallet_module.balance(bob, name) == 4.0
+        assert wallet_module.balance("miner_5002", name) == 10.0
+        assert _tip(client) == mined["hash"]
+        assert _pending_ids(client) == []
+
+
+def test_cli_sends_to_a_plain_label(net, tmp_path, capsys):
+    alice_key, alice_pub = _keygen(tmp_path, "alice")
+    a = _node_mining_to_wallet(5001, alice_pub)
+    net.clients["node-a"] = a
+    _mine(a)
+
+    send_args = ["send", "--key", alice_key, "--to", "carol", "--amount", "3", "--node", "node-a"]
+    assert wallet_module.main(send_args) == 0
+    tx_id = capsys.readouterr().out.strip()
+    mined = _mine(a)  # alice also gets this reward
+
+    assert tx_id in [t["tx_id"] for t in mined["transactions"]]
+    assert wallet_module.main(["balance", "--address", "carol", "--node", "node-a"]) == 0
+    assert capsys.readouterr().out == "3.0\n"
+    assert wallet_module.main(["balance", "--pub", alice_pub, "--node", "node-a"]) == 0
+    assert capsys.readouterr().out == "17.0\n"  # 2 x 10 - 3
+
+
+def test_cli_send_beyond_the_balance_prints_the_node_error_and_exits_nonzero(net, tmp_path, capsys):
+    alice_key, alice_pub = _keygen(tmp_path, "alice")
+    _, bob_pub = _keygen(tmp_path, "bob")
+    a = _node_mining_to_wallet(5001, alice_pub)
+    net.clients["node-a"] = a
+    _mine(a)  # alice has 10
+
+    send_args = ["send", "--key", alice_key, "--to", bob_pub, "--amount", "30", "--node", "node-a"]
+
+    assert wallet_module.main(send_args) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err == "error: insufficient balance (balance=10.0, pending=0, required=30.0)\n"
+    assert _pending_ids(a) == []
+
+
+def test_keygen_refuses_to_overwrite_a_wallet(tmp_path, capsys):
+    key_file, pub_file = wallet_module.keygen("alice", str(tmp_path))
+    before = (key_file.read_text(), pub_file.read_text())
+
+    with pytest.raises(FileExistsError):
+        wallet_module.keygen("alice", str(tmp_path))
+    assert wallet_module.main(["keygen", "alice", "--dir", str(tmp_path)]) == 1
+    assert "already exists" in capsys.readouterr().err
+    assert (key_file.read_text(), pub_file.read_text()) == before
+
+    key_file.unlink()
+    with pytest.raises(FileExistsError):  # the .pub alone is enough to refuse
+        wallet_module.keygen("alice", str(tmp_path))
+    assert not key_file.exists()
+
+
+def test_node_refuses_a_private_key_as_its_miner_pubkey_file(tmp_path):
+    key_file, _ = _keygen(tmp_path, "alice")
+    with pytest.raises(ValueError, match="not a PEM public key"):
+        _node_mining_to_wallet(5001, key_file)

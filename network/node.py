@@ -1,6 +1,7 @@
 import threading
 import time
 import types
+from pathlib import Path
 
 import requests
 from flask import Flask, jsonify, request
@@ -12,13 +13,33 @@ from consensus.proof_of_work import ProofOfWork
 from mempool.pool import Mempool
 from sync.synchronizer import Synchronizer
 from utils.logger import get_logger
+from utils.signing import pem_to_public_key
 
 logger = get_logger(__name__)
+
+
+def _miner_address(cfg: types.ModuleType) -> str:
+    """
+    Where this node's mining rewards go: the wallet in MINER_PUBKEY_FILE if set,
+    else the MINER_ADDRESS label.  The node only needs the wallet's PUBLIC key:
+    the PEM text (without surrounding whitespace) is the address.
+    """
+    if not cfg.MINER_PUBKEY_FILE:
+        return cfg.MINER_ADDRESS
+    pem = Path(cfg.MINER_PUBKEY_FILE).read_text().strip()
+    try:
+        pem_to_public_key(pem)  # refuses a private key, which must never go into a block
+    except ValueError:
+        raise ValueError(
+            f"MINER_PUBKEY_FILE={cfg.MINER_PUBKEY_FILE} is not a PEM public key (use the wallet's .pub file)"
+        ) from None
+    return pem
 
 
 def create_app(cfg: types.ModuleType) -> Flask:
     app = Flask(__name__)
 
+    miner_address = _miner_address(cfg)
     blockchain = Blockchain(cfg.MINING_REWARD)
     mempool = Mempool()
     peers: set = set()
@@ -184,7 +205,7 @@ def create_app(cfg: types.ModuleType) -> Flask:
         # Read the tip once: the chain can change between two separate reads.
         tip = blockchain.last_block
         pending = mempool.get_transactions(limit=10)
-        coinbase = Transaction(sender="COINBASE", receiver=cfg.MINER_ADDRESS, amount=cfg.MINING_REWARD)
+        coinbase = Transaction(sender="COINBASE", receiver=miner_address, amount=cfg.MINING_REWARD)
         transactions = blockchain.select_transactions(tip.hash, coinbase, pending)
         # A pending tx that can't go on the tip (already confirmed or not affordable)
         # would make the block invalid, so drop it from the mempool.
