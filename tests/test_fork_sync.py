@@ -42,6 +42,7 @@ class _Transport:
     def __init__(self) -> None:
         self.clients: dict = {}
         self.gets: list = []  # paths requested with GET, in order
+        self.posts: list = []  # paths sent with POST, in order
 
     def _route(self, url: str):
         host, _, path = url.removeprefix("http://").partition("/")
@@ -56,6 +57,7 @@ class _Transport:
 
     def post(self, url: str, json=None, **_kwargs) -> _Response:
         client, path = self._route(url)
+        self.posts.append(path)
         return _Response(client.post(path, json=json))
 
 
@@ -451,3 +453,24 @@ def test_mine_skips_and_evicts_an_unaffordable_pending_tx(net):
     assert [t["sender"] for t in mined["transactions"]] == ["COINBASE"]
     assert _pending_ids(b) == []
     assert a.post("/blocks/new", json=mined).status_code == 201  # valid for other nodes too
+
+
+# ------------------------------------------------------------------ #
+#  Only miners create coinbase transactions (B-17a)
+# ------------------------------------------------------------------ #
+
+
+def test_coinbase_tx_submitted_by_a_client_is_rejected_and_not_relayed(net):
+    a = create_app(_cfg(5001)).test_client()
+    b = create_app(_cfg(5002)).test_client()
+    net.clients.update({"node-a": a, "node-b": b})
+    assert a.post("/peers/register", json={"address": "node-b"}).status_code == 200
+    tx = Transaction(sender="COINBASE", receiver="someone", amount=10.0)
+
+    resp = a.post("/transactions/new", json=tx.to_dict())
+
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "coinbase transactions are created by miners only"}
+    assert _pending_ids(a) == []
+    assert net.posts == []  # not gossiped to B
+    assert a.get("/metrics").get_json()["tx_submitted"] == 0

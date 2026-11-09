@@ -116,23 +116,25 @@ def create_app(cfg: types.ModuleType) -> Flask:
             tx = Transaction.from_dict(data)
         except (KeyError, TypeError, ValueError) as e:
             return jsonify({"error": str(e)}), 400
+        # A coinbase can never be mined from the mempool: /mine adds its own.
+        if tx.sender == "COINBASE":
+            return jsonify({"error": "coinbase transactions are created by miners only"}), 400
         if mempool.has_transaction(tx.tx_id):
             return jsonify({"error": "transaction already pending"}), 400
         if tx.tx_id in blockchain.get_chain_tx_ids():
             return jsonify({"error": "transaction already confirmed"}), 400
-        if tx.sender != "COINBASE":
-            # The sender's pending transactions already spend part of the balance.
-            balance = blockchain.get_balance(tx.sender)
-            pending = mempool.pending_spend(tx.sender)
-            if balance - pending < tx.amount:
-                return jsonify(
-                    {
-                        "error": "insufficient balance",
-                        "balance": round(balance, 8),
-                        "pending": round(pending, 8),
-                        "required": tx.amount,
-                    }
-                ), 400
+        # The sender's pending transactions already spend part of the balance.
+        balance = blockchain.get_balance(tx.sender)
+        pending = mempool.pending_spend(tx.sender)
+        if balance - pending < tx.amount:
+            return jsonify(
+                {
+                    "error": "insufficient balance",
+                    "balance": round(balance, 8),
+                    "pending": round(pending, 8),
+                    "required": tx.amount,
+                }
+            ), 400
         if mempool.add_transaction(tx):
             _inc("tx_submitted")
             _broadcast("/transactions/new", tx.to_dict())
@@ -184,8 +186,8 @@ def create_app(cfg: types.ModuleType) -> Flask:
         pending = mempool.get_transactions(limit=10)
         coinbase = Transaction(sender="COINBASE", receiver=cfg.MINER_ADDRESS, amount=cfg.MINING_REWARD)
         transactions = blockchain.select_transactions(tip.hash, coinbase, pending)
-        # A pending tx that can't go on the tip (already confirmed, not affordable, or a
-        # coinbase) would make the block invalid, so drop it from the mempool.
+        # A pending tx that can't go on the tip (already confirmed or not affordable)
+        # would make the block invalid, so drop it from the mempool.
         selected = {tx.tx_id for tx in transactions}
         mempool.remove_transactions([tx.tx_id for tx in pending if tx.tx_id not in selected])
 
