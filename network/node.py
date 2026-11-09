@@ -1,6 +1,7 @@
 import threading
 import time
 import types
+from pathlib import Path
 
 import requests
 from flask import Flask, jsonify, request
@@ -12,14 +13,34 @@ from consensus.proof_of_work import ProofOfWork
 from mempool.pool import Mempool
 from sync.synchronizer import Synchronizer
 from utils.logger import get_logger
+from utils.signing import pem_to_public_key
 
 logger = get_logger(__name__)
+
+
+def _miner_address(cfg: types.ModuleType) -> str:
+    """
+    Where this node's mining rewards go: the wallet in MINER_PUBKEY_FILE if set,
+    else the MINER_ADDRESS label.  The node only needs the wallet's PUBLIC key:
+    the PEM text (without surrounding whitespace) is the address.
+    """
+    if not cfg.MINER_PUBKEY_FILE:
+        return cfg.MINER_ADDRESS
+    pem = Path(cfg.MINER_PUBKEY_FILE).read_text().strip()
+    try:
+        pem_to_public_key(pem)  # refuses a private key, which must never go into a block
+    except ValueError:
+        raise ValueError(
+            f"MINER_PUBKEY_FILE={cfg.MINER_PUBKEY_FILE} is not a PEM public key (use the wallet's .pub file)"
+        ) from None
+    return pem
 
 
 def create_app(cfg: types.ModuleType) -> Flask:
     app = Flask(__name__)
 
-    blockchain = Blockchain()
+    miner_address = _miner_address(cfg)
+    blockchain = Blockchain(cfg.MINING_REWARD)
     mempool = Mempool()
     peers: set = set()
     pow_engine = ProofOfWork(cfg.DIFFICULTY)
@@ -32,9 +53,9 @@ def create_app(cfg: types.ModuleType) -> Flask:
         "start_time": time.time(),
         "blocks_mined": 0,  # blocks this node successfully mined
         "blocks_received": 0,  # new blocks accepted from peers
-        "blocks_rejected": 0,  # blocks rejected (bad PoW / unknown parent)
+        "blocks_rejected": 0,  # blocks rejected (invalid, or missing parents not found)
         "reorgs": 0,  # chain reorganisations triggered
-        "sync_calls": 0,  # incremental sync rounds initiated
+        "sync_calls": 0,  # catch-up rounds initiated (startup sync, missing parents)
         "tx_submitted": 0,  # transactions accepted into mempool
     }
     _metrics_lock = threading.Lock()
@@ -43,6 +64,26 @@ def create_app(cfg: types.ModuleType) -> Flask:
         with _metrics_lock:
             _metrics[key] += amount
 
+    def _update_mempool(old_chain_hashes: set) -> None:
+        """
+        Bring the mempool in line with the main chain after it changed.
+        Transactions from blocks that left the main chain (a reorg) go back
+        to the mempool so they are not lost; every transaction now on the
+        main chain is removed, so it is not mined again.
+        """
+        confirmed = blockchain.get_chain_tx_ids()
+        orphaned_hashes = old_chain_hashes - blockchain.get_chain_block_hashes()
+        if orphaned_hashes:
+            _inc("reorgs")
+            logger.info("reorg: %d block(s) left the main chain", len(orphaned_hashes))
+            for h in orphaned_hashes:
+                orphaned = blockchain.get_block_by_hash(h)
+                if orphaned:
+                    for tx in orphaned.transactions:
+                        if tx.sender != "COINBASE" and tx.tx_id not in confirmed:
+                            mempool.add_transaction(tx)
+        mempool.remove_transactions(confirmed)
+
     if cfg.SEED_PEER:
         seed = cfg.SEED_PEER.strip()
         peers.add(seed)
@@ -50,8 +91,10 @@ def create_app(cfg: types.ModuleType) -> Flask:
         # Use incremental sync on start-up: ask for only the blocks we lack.
         # Falls back to full sync automatically when the peer's chain is large
         # and the /blocks/since endpoint returns many results.
+        old_chain_hashes = blockchain.get_chain_block_hashes()
         synchronizer.sync_incremental(peers)
         _inc("sync_calls")
+        _update_mempool(old_chain_hashes)
 
     def _broadcast(endpoint: str, payload: dict) -> None:
         def _send(peer: str) -> None:
@@ -94,16 +137,25 @@ def create_app(cfg: types.ModuleType) -> Flask:
             tx = Transaction.from_dict(data)
         except (KeyError, TypeError, ValueError) as e:
             return jsonify({"error": str(e)}), 400
-        if tx.sender != "COINBASE":
-            balance = blockchain.get_balance(tx.sender)
-            if balance < tx.amount:
-                return jsonify(
-                    {
-                        "error": "insufficient balance",
-                        "balance": round(balance, 8),
-                        "required": tx.amount,
-                    }
-                ), 400
+        # A coinbase can never be mined from the mempool: /mine adds its own.
+        if tx.sender == "COINBASE":
+            return jsonify({"error": "coinbase transactions are created by miners only"}), 400
+        if mempool.has_transaction(tx.tx_id):
+            return jsonify({"error": "transaction already pending"}), 400
+        if tx.tx_id in blockchain.get_chain_tx_ids():
+            return jsonify({"error": "transaction already confirmed"}), 400
+        # The sender's pending transactions already spend part of the balance.
+        balance = blockchain.get_balance(tx.sender)
+        pending = mempool.pending_spend(tx.sender)
+        if balance - pending < tx.amount:
+            return jsonify(
+                {
+                    "error": "insufficient balance",
+                    "balance": round(balance, 8),
+                    "pending": round(pending, 8),
+                    "required": tx.amount,
+                }
+            ), 400
         if mempool.add_transaction(tx):
             _inc("tx_submitted")
             _broadcast("/transactions/new", tx.to_dict())
@@ -126,50 +178,64 @@ def create_app(cfg: types.ModuleType) -> Flask:
         if blockchain.has_block(block.hash):
             return jsonify({"message": f"block {block.index} already known"}), 200
 
+        # Taken before any catch-up, so a reorg caused by fetched ancestors is detected too.
         old_chain_hashes = blockchain.get_chain_block_hashes()
-        if blockchain.add_block(block, cfg.DIFFICULTY):
+        if blockchain.has_block(block.previous_hash):
+            accepted = blockchain.add_block(block, cfg.DIFFICULTY)
+        else:
+            # Parent unknown (e.g. it is still in flight, or we are on another fork):
+            # fetch the missing ancestors from peers by hash, then add the block.
+            _inc("sync_calls")
+            accepted = synchronizer.add_with_ancestors(block, peers)
+        # Catch-up can change the main chain even when *block* itself is rejected.
+        _update_mempool(old_chain_hashes)
+
+        if accepted:
             _inc("blocks_received")
-            # Find blocks that were on the old chain but not the new one (reorg).
-            # Their transactions must be returned to the mempool so they are not lost.
-            orphaned_hashes = old_chain_hashes - blockchain.get_chain_block_hashes()
-            if orphaned_hashes:
-                _inc("reorgs")
-                logger.info("reorg: %d block(s) orphaned after block %d", len(orphaned_hashes), block.index)
-                for h in orphaned_hashes:
-                    orphaned = blockchain.get_block_by_hash(h)
-                    if orphaned:
-                        for tx in orphaned.transactions:
-                            if tx.sender != "COINBASE":
-                                mempool.add_transaction(tx)
-            mempool.remove_transactions([tx.tx_id for tx in block.transactions if tx.sender != "COINBASE"])
             _broadcast("/blocks/new", block.to_dict())
             return jsonify({"message": f"block {block.index} accepted"}), 201
 
+        # Invalid block, or its ancestors could not be fetched.  Invalid blocks
+        # trigger no fetching, so a bad peer can't make us sync.
         _inc("blocks_rejected")
-        # Block was rejected (unknown parent / bad PoW).  Use incremental sync
-        # to fill any gap rather than re-downloading the whole chain.
-        _inc("sync_calls")
-        replaced = synchronizer.sync_incremental(peers)
-        return jsonify({"error": "block rejected", "chain_replaced": replaced}), 400
+        return jsonify({"error": "block rejected"}), 400
 
     @app.route("/mine", methods=["POST"])
     def mine():
+        # Read the tip once: the chain can change between two separate reads.
+        tip = blockchain.last_block
         pending = mempool.get_transactions(limit=10)
-        coinbase = Transaction(sender="COINBASE", receiver=cfg.MINER_ADDRESS, amount=cfg.MINING_REWARD)
-        transactions = [coinbase] + pending
+        coinbase = Transaction(sender="COINBASE", receiver=miner_address, amount=cfg.MINING_REWARD)
+        transactions = blockchain.select_transactions(tip.hash, coinbase, pending)
+        # A pending tx that can't go on the tip (already confirmed or not affordable)
+        # would make the block invalid, so drop it from the mempool.
+        selected = {tx.tx_id for tx in transactions}
+        mempool.remove_transactions([tx.tx_id for tx in pending if tx.tx_id not in selected])
 
         block = Block(
-            index=len(blockchain.chain),
-            previous_hash=blockchain.last_block.hash,
+            index=tip.index + 1,
+            previous_hash=tip.hash,
             transactions=transactions,
         )
         pow_engine.mine(block)
 
+        old_chain_hashes = blockchain.get_chain_block_hashes()
         if not blockchain.add_block(block, cfg.DIFFICULTY):
             return jsonify({"error": "mined block rejected — chain moved on"}), 409
 
+        # add_block also accepts side-branch blocks.  If another block took this
+        # height while we were mining, ours lost the race: keep the pending
+        # transactions, and don't broadcast or count the stale block.
+        if block.hash not in blockchain.get_chain_block_hashes():
+            return jsonify(
+                {
+                    "error": "mined block is on a side branch (another block won the race)",
+                    "block": block.to_dict(),
+                }
+            ), 409
+
         _inc("blocks_mined")
-        mempool.remove_transactions([tx.tx_id for tx in pending])
+        _update_mempool(old_chain_hashes)
         _broadcast("/blocks/new", block.to_dict())
         return jsonify({"block": block.to_dict()}), 201
 
@@ -190,6 +256,19 @@ def create_app(cfg: types.ModuleType) -> Flask:
         """
         blocks = [b.to_dict() for b in blockchain.chain if b.index > since_index]
         return jsonify({"blocks": blocks, "count": len(blocks)}), 200
+
+    @app.route("/blocks/<block_hash>", methods=["GET"])
+    def get_block(block_hash: str):
+        """
+        One block by hash, from the main chain or a side branch (404 if unknown).
+
+        A node that receives a block whose parent it lacks walks back through
+        this endpoint, one ancestor at a time, until it reaches a block it knows.
+        """
+        block = blockchain.get_block_by_hash(block_hash)
+        if block is None:
+            return jsonify({"error": "block not found"}), 404
+        return jsonify(block.to_dict()), 200
 
     @app.route("/status", methods=["GET"])
     def status():
@@ -236,9 +315,9 @@ def create_app(cfg: types.ModuleType) -> Flask:
         uptime_seconds      : seconds since this node process started
         blocks_mined        : blocks this node produced via /mine
         blocks_received     : new blocks accepted from peers via /blocks/new
-        blocks_rejected     : blocks turned away (bad PoW or unknown parent)
+        blocks_rejected     : blocks turned away (invalid, or missing parents not found)
         reorgs              : chain reorganisations (longer fork took over)
-        sync_calls          : incremental sync rounds this node initiated
+        sync_calls          : catch-up rounds this node initiated (startup sync, missing parents)
         tx_submitted        : transactions accepted into the local mempool
         chain_length        : current canonical chain height
         known_blocks_total  : all blocks ever seen (main chain + side branches)
@@ -249,7 +328,7 @@ def create_app(cfg: types.ModuleType) -> Flask:
             snapshot = dict(_metrics)
 
         chain_len = len(blockchain.chain)
-        known_total = len(blockchain._block_store)
+        known_total = blockchain.known_block_count()
 
         return jsonify(
             {

@@ -1,15 +1,19 @@
 import threading
-from typing import Dict, List
+from collections import defaultdict
+from typing import DefaultDict, Dict, List, Optional, Set, Tuple
 
 from blockchain.block import Block
+from blockchain.transaction import Transaction
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class Blockchain:
-    def __init__(self) -> None:
+    def __init__(self, mining_reward: float = 10.0) -> None:
         self._lock = threading.Lock()
+        # What every block's coinbase must pay (the default matches config.MINING_REWARD's).
+        self.mining_reward = float(mining_reward)
         self.chain: List[Block] = []
         # Every valid block we have ever seen, keyed by its hash.
         # This covers both the main chain AND any side-chain / orphan blocks.
@@ -40,21 +44,20 @@ class Blockchain:
 
         A block is accepted when:
           1. Its PoW is valid.
-          2. All its transactions are valid.
+          2. All its transactions are valid, and exactly one is a coinbase:
+             the first, paying the mining reward.
           3. Its parent (previous_hash) is already known — either on the
              main chain or in a side branch.  This allows us to store fork
              blocks rather than discarding them.
+          4. It is valid on top of its parent (see _check_on_parent).
 
         After acceptance, _update_main_chain() walks all known branch tips
         and switches self.chain to the longest valid path.
         """
         with self._lock:
-            if not self._valid_proof(block, difficulty):
-                logger.warning("block %d rejected: bad proof-of-work", block.index)
-                return False
-
-            if not all(tx.is_valid() for tx in block.transactions):
-                logger.warning("block %d rejected: invalid transaction", block.index)
+            problem = self.check_block(block, difficulty)
+            if problem:
+                logger.warning("block %d rejected: %s", block.index, problem)
                 return False
 
             # Accept the block if its parent is known (main chain OR fork pool)
@@ -70,6 +73,11 @@ class Blockchain:
             if block.hash in self._block_store:
                 logger.debug("block %d already known, skipping", block.index)
                 return True
+
+            problem = self._check_on_parent(block)
+            if problem:
+                logger.warning("block %d rejected: %s", block.index, problem)
+                return False
 
             self._block_store[block.hash] = block
             logger.info(
@@ -156,10 +164,20 @@ class Blockchain:
         with self._lock:
             return self._block_store.get(block_hash)
 
+    def known_block_count(self) -> int:
+        """Return how many blocks we know: main chain plus side branches."""
+        with self._lock:
+            return len(self._block_store)
+
     def get_chain_block_hashes(self) -> set:
         """Return the set of block hashes currently on the main chain."""
         with self._lock:
             return {b.hash for b in self.chain}
+
+    def get_chain_tx_ids(self) -> set:
+        """Return the set of tx_ids currently on the main chain."""
+        with self._lock:
+            return {tx.tx_id for b in self.chain for tx in b.transactions}
 
     def get_balance(self, address: str) -> float:
         """
@@ -178,9 +196,91 @@ class Blockchain:
                         balance -= tx.amount
             return balance
 
+    def select_transactions(
+        self, parent_hash: str, coinbase: Transaction, pending: List[Transaction]
+    ) -> List[Transaction]:
+        """
+        Pick the transactions for a new block on *parent_hash*: *coinbase*,
+        then each pending tx that is valid after the ones before it.  Skips
+        any that is a coinbase, already on that branch, or not affordable,
+        so add_block won't reject the block because of them.
+        """
+        with self._lock:
+            balances, tx_ids = self._branch_state(parent_hash)
+            self._apply(coinbase, balances, tx_ids)
+            selected = [coinbase]
+            for tx in pending:
+                if tx.sender != "COINBASE" and self._apply(tx, balances, tx_ids) is None:
+                    selected.append(tx)
+            return selected
+
     # ------------------------------------------------------------------
     # Validation helpers
     # ------------------------------------------------------------------
+
+    def check_block(self, block: Block, difficulty: int) -> Optional[str]:
+        """
+        Return why *block* is invalid on its own (without looking at its
+        parent), or None if it is valid.  Lets callers reject a bad block
+        before fetching any of its missing ancestors.
+        """
+        if not self._valid_proof(block, difficulty):
+            return "bad proof-of-work"
+        if not all(tx.is_valid() for tx in block.transactions):
+            return "invalid transaction"
+        coinbase_positions = [i for i, tx in enumerate(block.transactions) if tx.sender == "COINBASE"]
+        if coinbase_positions != [0]:
+            return "a block needs exactly one coinbase transaction, and it must be first"
+        if float(block.transactions[0].amount) != self.mining_reward:
+            return f"coinbase pays {block.transactions[0].amount}, not the reward {self.mining_reward}"
+        return None
+
+    def _check_on_parent(self, block: Block) -> Optional[str]:
+        """
+        Return why *block* is invalid on top of its parent, or None if it is
+        valid.  The rules use the branch the block extends, not the main
+        chain, so valid fork blocks are accepted.  The parent must be known,
+        and the caller holds the lock.
+        """
+        parent = self._block_store[block.previous_hash]
+        if block.index != parent.index + 1:
+            return f"index {block.index} does not follow parent index {parent.index}"
+        balances, tx_ids = self._branch_state(parent.hash)
+        for tx in block.transactions:
+            problem = self._apply(tx, balances, tx_ids)
+            if problem:
+                return problem
+        return None
+
+    def _branch_state(self, tip_hash: str) -> Tuple[DefaultDict[str, float], Set[str]]:
+        """
+        Replay the branch from genesis to *tip_hash* into balances per
+        address and the set of tx_ids on it.  The caller holds the lock.
+        """
+        balances: DefaultDict[str, float] = defaultdict(float)
+        tx_ids: Set[str] = set()
+        for block in self._build_chain_to_genesis(tip_hash):
+            for tx in block.transactions:
+                balances[tx.receiver] += tx.amount
+                balances[tx.sender] -= tx.amount
+                tx_ids.add(tx.tx_id)
+        return balances, tx_ids
+
+    @staticmethod
+    def _apply(tx: Transaction, balances: DefaultDict[str, float], tx_ids: Set[str]) -> Optional[str]:
+        """
+        Apply *tx* to a branch's *balances* and *tx_ids*, after the
+        transactions before it.  Returns why it can't be applied (changing
+        nothing), or None.
+        """
+        if tx.tx_id in tx_ids:
+            return f"tx {tx.tx_id} is already on this branch"
+        if tx.sender != "COINBASE" and balances[tx.sender] < tx.amount:
+            return f"tx {tx.tx_id} spends {tx.amount} but its sender has {balances[tx.sender]}"
+        balances[tx.receiver] += tx.amount
+        balances[tx.sender] -= tx.amount
+        tx_ids.add(tx.tx_id)
+        return None
 
     @staticmethod
     def _valid_proof(block: Block, difficulty: int) -> bool:
@@ -209,9 +309,10 @@ class Blockchain:
         return {"chain": [b.to_dict() for b in self.chain], "length": len(self.chain)}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Blockchain":
+    def from_dict(cls, d: dict, mining_reward: float = 10.0) -> "Blockchain":
         instance = cls.__new__(cls)
         instance._lock = threading.Lock()
+        instance.mining_reward = float(mining_reward)
         instance._block_store = {}
         instance.chain = [Block.from_dict(b) for b in d["chain"]]
         # Rebuild the block store from the flat chain list

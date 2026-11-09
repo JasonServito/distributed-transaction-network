@@ -4,7 +4,9 @@ import pytest
 
 from blockchain.block import Block
 from blockchain.chain import Blockchain
+from blockchain.transaction import Transaction
 from consensus.proof_of_work import ProofOfWork
+from utils.signing import generate_keypair, public_key_to_pem
 
 DIFFICULTY = 2  # low difficulty so tests run quickly
 
@@ -20,10 +22,38 @@ def _mine_block(chain: Blockchain, transactions=None) -> Block:
     block = Block(
         index=len(chain.chain),
         previous_hash=chain.last_block.hash,
-        transactions=transactions or [],
+        transactions=transactions or [_coinbase()],
     )
     pow_engine.mine(block)
     return block
+
+
+def _coinbase(receiver: str = "miner", amount: float = 10.0) -> Transaction:
+    return Transaction(sender="COINBASE", receiver=receiver, amount=amount)
+
+
+def _block_on(parent: Block, transactions=None, index=None) -> Block:
+    """Mine a block on *parent*: by default the next index, holding just a coinbase."""
+    block = Block(
+        index=parent.index + 1 if index is None else index,
+        previous_hash=parent.hash,
+        transactions=[_coinbase()] if transactions is None else transactions,
+    )
+    return ProofOfWork(DIFFICULTY).mine(block)
+
+
+@pytest.fixture(scope="module")
+def wallet():
+    """A key pair: (private key, address)."""
+    private_key, public_key = generate_keypair()
+    return private_key, public_key_to_pem(public_key)
+
+
+def _signed(wallet, amount: float, receiver: str = "someone") -> Transaction:
+    private_key, address = wallet
+    tx = Transaction(sender=address, receiver=receiver, amount=amount)
+    tx.sign(private_key)
+    return tx
 
 
 # ------------------------------------------------------------------ #
@@ -67,10 +97,10 @@ class TestAddBlock:
         block = Block(
             index=1,
             previous_hash="wrong" * 10,
-            transactions=[],
+            transactions=[_coinbase()],
         )
-        # Force the hash to look valid (starts with zeros) but previous_hash is wrong
-        block.hash = block.compute_hash()
+        # Valid PoW and coinbase, so the unknown parent is the only problem
+        ProofOfWork(DIFFICULTY).mine(block)
         assert bc.add_block(block, DIFFICULTY) is False
 
     def test_block_without_valid_pow_rejected(self):
@@ -78,7 +108,7 @@ class TestAddBlock:
         block = Block(
             index=1,
             previous_hash=bc.last_block.hash,
-            transactions=[],
+            transactions=[_coinbase()],
         )
         block.nonce = 0
         block.hash = block.compute_hash()  # hash almost certainly won't satisfy difficulty
@@ -86,6 +116,145 @@ class TestAddBlock:
         if block.hash.startswith("0" * DIFFICULTY):
             pytest.skip("Hash accidentally satisfies PoW — re-run to get a different timestamp.")
         assert bc.add_block(block, DIFFICULTY) is False
+
+
+# ------------------------------------------------------------------ #
+#  Block index (B-13)
+# ------------------------------------------------------------------ #
+
+
+class TestBlockIndex:
+    def test_block_index_must_follow_its_parent(self):
+        bc = Blockchain()
+        genesis = bc.last_block
+        for wrong_index in (0, 2):
+            assert bc.add_block(_block_on(genesis, index=wrong_index), DIFFICULTY) is False
+        assert bc.add_block(_block_on(genesis), DIFFICULTY) is True
+
+    def test_index_rule_holds_on_a_side_branch(self):
+        bc = Blockchain()
+        m1 = _block_on(bc.last_block)
+        m2 = _block_on(m1)
+        for block in (m1, m2):
+            assert bc.add_block(block, DIFFICULTY)
+
+        # A block on m1 follows m1's index, not the main chain tip's.
+        assert bc.add_block(_block_on(m1, index=m2.index + 1), DIFFICULTY) is False
+        side = _block_on(m1)
+        assert bc.add_block(side, DIFFICULTY) is True
+        assert bc.last_block.hash == m2.hash
+
+
+# ------------------------------------------------------------------ #
+#  Coinbase rules (B-14)
+# ------------------------------------------------------------------ #
+
+
+class TestCoinbase:
+    def test_block_without_a_coinbase_rejected(self, wallet):
+        bc = Blockchain()
+        genesis = bc.last_block
+        for transactions in ([], [_signed(wallet, 1.0)]):
+            assert bc.add_block(_block_on(genesis, transactions), DIFFICULTY) is False
+
+    def test_block_with_two_coinbases_rejected(self):
+        bc = Blockchain()
+        block = _block_on(bc.last_block, [_coinbase(), _coinbase()])
+        assert bc.add_block(block, DIFFICULTY) is False
+
+    def test_coinbase_not_first_rejected(self, wallet):
+        bc = Blockchain()
+        block = _block_on(bc.last_block, [_signed(wallet, 1.0), _coinbase()])
+        assert bc.add_block(block, DIFFICULTY) is False
+
+    def test_coinbase_must_pay_exactly_the_reward(self):
+        bc = Blockchain(mining_reward=10.0)
+        genesis = bc.last_block
+        for amount in (9.0, 10.5, 1000.0):
+            assert bc.add_block(_block_on(genesis, [_coinbase(amount=amount)]), DIFFICULTY) is False
+        assert bc.add_block(_block_on(genesis, [_coinbase(amount=10.0)]), DIFFICULTY) is True
+
+    def test_coinbase_amount_checked_after_a_dict_round_trip(self):
+        bc = Blockchain(mining_reward=10)  # from_dict turns every amount into a float
+        genesis = bc.last_block
+        wrong = Block.from_dict(_block_on(genesis, [_coinbase(amount=11.0)]).to_dict())
+        assert bc.add_block(wrong, DIFFICULTY) is False
+        right = Block.from_dict(_block_on(genesis, [_coinbase(amount=10.0)]).to_dict())
+        assert bc.add_block(right, DIFFICULTY) is True
+
+
+# ------------------------------------------------------------------ #
+#  Balances inside a block (B-15)
+# ------------------------------------------------------------------ #
+
+
+def _funded_chain(wallet):
+    """A chain whose block 1 pays the 10-coin reward to *wallet*; returns (chain, block 1)."""
+    bc = Blockchain()
+    funding = _block_on(bc.last_block, [_coinbase(receiver=wallet[1])])
+    assert bc.add_block(funding, DIFFICULTY)
+    return bc, funding
+
+
+class TestBalances:
+    def test_overspend_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        assert bc.add_block(_block_on(funding, [_coinbase(), _signed(wallet, 10.5)]), DIFFICULTY) is False
+        assert bc.add_block(_block_on(funding, [_coinbase(), _signed(wallet, 10.0)]), DIFFICULTY) is True
+
+    def test_txs_that_fit_alone_but_overspend_together_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        block = _block_on(funding, [_coinbase(), _signed(wallet, 6.0), _signed(wallet, 6.0)])
+        assert bc.add_block(block, DIFFICULTY) is False
+
+    def test_miner_can_spend_its_reward_in_the_same_block(self, wallet):
+        bc = Blockchain()
+        block = _block_on(bc.last_block, [_coinbase(receiver=wallet[1]), _signed(wallet, 10.0)])
+        assert bc.add_block(block, DIFFICULTY) is True
+
+    def test_balances_come_from_the_branch_the_block_extends(self, wallet):
+        bc = Blockchain()
+        genesis = bc.last_block
+        m1 = _block_on(genesis)
+        m2 = _block_on(m1)
+        side = _block_on(genesis, [_coinbase(receiver=wallet[1])])  # only this branch funds the wallet
+        for block in (m1, m2, side):
+            assert bc.add_block(block, DIFFICULTY)
+        assert bc.last_block.hash == m2.hash
+        assert bc.get_balance(wallet[1]) == 0.0
+
+        assert bc.add_block(_block_on(side, [_coinbase(), _signed(wallet, 5.0)]), DIFFICULTY) is True
+        assert bc.add_block(_block_on(m2, [_coinbase(), _signed(wallet, 5.0)]), DIFFICULTY) is False
+
+
+# ------------------------------------------------------------------ #
+#  Replay protection (B-16)
+# ------------------------------------------------------------------ #
+
+
+class TestReplay:
+    def test_confirmed_tx_replayed_in_a_later_block_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        tx = _signed(wallet, 3.0)
+        first = _block_on(funding, [_coinbase(), tx])
+        assert bc.add_block(first, DIFFICULTY)
+        # The wallet could afford it again (7 left), but it's the same signed tx.
+        assert bc.add_block(_block_on(first, [_coinbase(), tx]), DIFFICULTY) is False
+
+    def test_duplicate_tx_id_inside_a_block_rejected(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        tx = _signed(wallet, 3.0)
+        assert bc.add_block(_block_on(funding, [_coinbase(), tx, tx]), DIFFICULTY) is False
+
+    def test_same_tx_may_appear_on_two_competing_branches(self, wallet):
+        bc, funding = _funded_chain(wallet)
+        tx = _signed(wallet, 3.0)
+        x1 = _block_on(funding, [_coinbase(), tx])
+        y1 = _block_on(funding, [_coinbase(), tx])
+        y2 = _block_on(y1)
+        for block in (x1, y1, y2):
+            assert bc.add_block(block, DIFFICULTY) is True
+        assert bc.last_block.hash == y2.hash
 
 
 # ------------------------------------------------------------------ #

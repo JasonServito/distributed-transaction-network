@@ -84,13 +84,27 @@ curl -X POST http://127.0.0.1:5000/mine
 curl http://127.0.0.1:5001/status
 ```
 
+**Send a payment** between two wallets (fresh nodes, one terminal each; keys go to `wallets/`, which git ignores):
+
+```bash
+python wallet.py keygen alice && python wallet.py keygen bob
+MINER_PUBKEY_FILE=wallets/alice.pub python main.py 5000   # node 1 mines to alice
+python main.py 5001 127.0.0.1:5000                        # node 2
+curl -X POST http://127.0.0.1:5000/mine                   # alice earns 10
+python wallet.py send --key wallets/alice.key --to wallets/bob.pub --amount 3 --node 127.0.0.1:5000
+curl -X POST http://127.0.0.1:5001/mine                   # node 2 confirms the payment
+python wallet.py balance --pub wallets/bob.pub --node 127.0.0.1:5001   # 3.0 (alice: 7.0)
+```
+
+On Windows PowerShell, set the variable first: `$env:MINER_PUBKEY_FILE="wallets/alice.pub"; python main.py 5000`.
+
 **Or with Docker:** `docker compose up --build` starts the same 3-node network on ports 5000–5002.
 
 **Tests:**
 
 ```bash
 pip install -r requirements-dev.txt  # adds test tools
-pytest tests/ -v                     # 35 unit tests (blocks, chain, transactions)
+pytest tests/ -v                     # unit tests (blocks, chain, transactions, fork sync)
 ./scripts/check.sh                   # lint, format, type check, unit tests
 python simulate_failures.py --runs 5 # crash recovery, fork resolution, propagation timing (8 checks), repeated
 ```

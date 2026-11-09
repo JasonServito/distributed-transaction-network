@@ -50,6 +50,7 @@ BASE = "http://127.0.0.1"
 STARTUP_TIMEOUT = 15.0  # Max seconds to wait for a node to become ready
 PORT_RELEASE_WAIT = 2.0  # Seconds to wait after killing before restarting on the same port
 PROPAGATION_WAIT = 4.0  # Seconds to allow block gossip to settle
+MAX_TIE_BREAKER_TRIES = 3  # Fork scenario: max blocks mined on A to get above B's block
 SYNC_WAIT = 8.0  # Seconds to wait after restarting a crashed node
 
 _BASE_ENV = {
@@ -181,11 +182,25 @@ def chain_tip(port: int) -> str:
         return ""
 
 
-def mine(port: int) -> Optional[dict]:
-    """Trigger /mine and return the response JSON, or None on failure."""
+def _blocks_rejected(port: int) -> object:
+    """blocks_rejected from /metrics, or '?' if the node is unreachable."""
+    try:
+        return requests.get(f"{BASE}:{port}/metrics", timeout=3).json()["blocks_rejected"]
+    except Exception:
+        return "?"
+
+
+def mine(port: int, allow_side_branch: bool = False) -> Optional[dict]:
+    """Trigger /mine and return the response JSON, or None on failure.
+
+    With allow_side_branch, a 409 that carries the block also counts: the
+    block was mined, but another block won the race for its height.
+    """
     try:
         r = requests.post(f"{BASE}:{port}/mine", timeout=30)
         if r.status_code == 201:
+            return r.json()
+        if allow_side_branch and r.status_code == 409 and "block" in r.json():
             return r.json()
     except Exception:
         pass
@@ -250,8 +265,8 @@ def test_crash_recovery(procs: list) -> None:
     ---------------
     - A restarting node calls /blocks/since to fetch only the blocks it
       missed (incremental sync) rather than re-downloading the whole chain.
-    - The Blockchain._block_store is correctly rebuilt from the downloaded
-      blocks so subsequent add_block calls work.
+    - Downloaded blocks go through add_block, so the node's block store
+      stays consistent and subsequent add_block calls work.
     """
     _section("Test 1: Crash Recovery")
     p0, p1, p2 = PORTS
@@ -300,7 +315,10 @@ def test_fork_resolution(procs: list) -> None:
     2. Mine one block independently on A and one on B concurrently.
        With DIFFICULTY=1 both finish almost instantly, so both often build
        on the same parent — creating a genuine fork.
-    3. Mine a second tie-breaker block on A, making A's branch the longest.
+    3. Mine tie-breaker blocks on A (at most MAX_TIE_BREAKER_TRIES) until A's
+       tip is higher than B's fork block. B's block is sometimes built on
+       A's block, so one tie-breaker can land at the same height as B's
+       block; nodes keep the tip they saw first, so that tie never resolves.
     4. Re-register peers and allow gossip to propagate.
     5. All nodes must converge on A's tip (longest chain wins).
 
@@ -337,7 +355,8 @@ def test_fork_resolution(procs: list) -> None:
     fork_results: list = [None, None]
 
     def mine_on(port: int, idx: int) -> None:
-        fork_results[idx] = mine(port)
+        # Losing the race (409 with the block) still makes a fork block.
+        fork_results[idx] = mine(port, allow_side_branch=True)
 
     t0 = threading.Thread(target=mine_on, args=(p0, 0), daemon=True)
     t1 = threading.Thread(target=mine_on, args=(p1, 1), daemon=True)
@@ -356,9 +375,22 @@ def test_fork_resolution(procs: list) -> None:
         _report("Winning chain is longer than the fork branch", False, "skipped — one mine failed")
         return
 
-    # ---- Step 2: mine a tie-breaker on A ----
+    # ---- Step 2: mine on A until its tip is higher than B's fork block ----
+    # B's block is sometimes built on A's block rather than forking from it. A
+    # single tie-breaker could then land at the same height as B's block, and
+    # nodes keep the tip they saw first (first-seen rule), so no node would
+    # switch. Retry until A's tip is strictly above B's block.
+    b_index = fork_results[1]["block"]["index"]
     print("  Mining tie-breaker block on node A ...")
-    mine(p0)
+    tie_tries = 0
+    a_tip_index = -1
+    for tie_tries in range(1, MAX_TIE_BREAKER_TRIES + 1):
+        tie_block = mine(p0)
+        if tie_block is not None:
+            a_tip_index = tie_block["block"]["index"]
+            if a_tip_index > b_index:
+                break
+    print(f"        tie-breaker tries: {tie_tries}  A tip index={a_tip_index}  B fork block index={b_index}")
 
     # ---- Step 3: reconnect and wait for convergence ----
     print("  Re-registering peers and waiting for convergence ...")
@@ -374,10 +406,17 @@ def test_fork_resolution(procs: list) -> None:
     tip_b = chain_tip(p1)
     tip_c = chain_tip(p2)
 
+    # Chain length and blocks_rejected per node tell failures apart: an
+    # equal-height tie shows no rejections; a missing parent shows some.
+    node_state = "  ".join(
+        f"{name}(len={chain_length(port)}, rejected={_blocks_rejected(port)})"
+        for name, port in zip("ABC", PORTS)
+    )
     _report(
         "All nodes converge on the same tip (longest chain wins)",
         tip_a == tip_b == tip_c and tip_a != "",
-        f"A={tip_a[:16]}...  B={tip_b[:16]}...  C={tip_c[:16]}...",
+        f"A={tip_a[:16]}...  B={tip_b[:16]}...  C={tip_c[:16]}...  {node_state}  "
+        f"tie-breaker tries={tie_tries} (A tip index={a_tip_index}, B fork block index={b_index})",
     )
 
     len_a = chain_length(p0)

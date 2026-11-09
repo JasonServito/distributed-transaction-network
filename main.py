@@ -51,7 +51,7 @@ def main() -> None:
         config.PORT,
         config.DIFFICULTY,
         config.SEED_PEER or "(none)",
-        config.MINER_ADDRESS,
+        config.MINER_PUBKEY_FILE or config.MINER_ADDRESS,
     )
 
     app = create_app(config)

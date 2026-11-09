@@ -19,24 +19,21 @@ Show, with evidence anyone can reproduce, that the network keeps **one consisten
 
 Every must-have task below traces back to one of these five outcomes (column **Why**).
 
-## Where we are (verified 2026-10-18)
+## Where we are (verified 2026-11-09)
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | ✅ 35/35 pass |
-| `python simulate_failures.py` (5 runs) | ⚠️ 3 of 5 runs passed all 8 checks. In the other 2, the check "All nodes converge on the same tip" failed: node A ended on a different tip from B and C |
+| `./scripts/check.sh` (ruff, mypy, pytest) | ✅ 71 tests pass |
+| `python simulate_failures.py --runs N` | ✅ 20/20 runs passed all 8 checks at the end of M1 (M1 gate). On 2026-10-18, before B-10a/B-11, 2 of 5 runs failed fork convergence |
 | Docker Compose 3-node network | ✅ (verified 2026-10-12) |
 
 **Known gaps, found in the code:**
 
-- **Fork healing is flaky.** Likely cause (not yet confirmed): catch-up asks for blocks by *index* (`/blocks/since/<n>`), so a node that misses a fork block never fetches the missing parent. Broadcasts run one thread per message, so blocks can arrive out of order.
-- **Blocks from peers are under-validated.** `add_block` checks only PoW, signatures, and that the parent is known ([chain.py:37](../blockchain/chain.py)). Any COINBASE transaction is valid ([transaction.py:52](../blockchain/transaction.py)), there is no balance or replay check inside blocks, and the block index isn't checked.
-- **Full sync bypasses the block store.** It overwrites `_block_store` directly, without the lock ([synchronizer.py:96](../sync/synchronizer.py)), and drops side branches.
-- **`/mine` can report success for a block that isn't on the main chain.** `add_block` returns `True` for side-branch blocks, so the 409 at [node.py:168](../network/node.py) never fires.
+- **Dead peers slow catch-up.** The walk-back tries peers in set order, and each dead peer costs a connection attempt per block (M3, B-32).
 - **No persistence.** The chain lives in memory only.
 - **One seed node, no peer exchange.** Nodes only learn about peers that register with them, so the simulation calls `cross_register` by hand.
 - **Mining is manual.** It only runs on `POST /mine`.
-- **Flask dev server, no lint/type checks, no CI.** `pytest` is mixed into runtime `requirements.txt`.
+- **Flask dev server.** No production server yet (B-51).
 
 ## Scope
 
@@ -51,6 +48,8 @@ Every must-have task below traces back to one of these five outcomes (column **W
 | Deploy on 3+ machines | Faster tip lookup (`_find_tips` scans every block) | |
 | 4 experiments + README results | Property-based tests | |
 | | Narrow blind `except Exception` blocks (`signing.py`, `transaction.py`, simulation); stricter ruff rules | |
+| | `Transaction` stores amount as float (int amounts sign as "4" but verify as "4.0"); clearer bad-signature error; `wallet.py keygen` rejects names with path separators | |
+| | Move the multi-node test harness into `tests/conftest.py`; split wallet tests into their own file | |
 
 **Rule:** a new idea goes into **Later** by default. It moves to Must-have only if it's needed for one of the five outcomes.
 
@@ -72,7 +71,7 @@ Milestones run **in order, one at a time**. Each ends with a **gate**: the next 
 | Milestone | Goal | Gate (must pass to move on) | Status |
 |---|---|---|---|
 | **M0 Guardrails** | One command tells us if anything broke | `scripts/check.sh` passes locally and in CI | done |
-| **M1 Correct & strict** | Forks always heal; invalid blocks are always rejected | check.sh green; simulation passes 20/20 runs in a row | todo |
+| **M1 Correct & strict** | Forks always heal; invalid blocks are always rejected | check.sh green; simulation passes 20/20 runs in a row | done |
 | **M2 Durable nodes** | Nodes survive a hard kill | `kill -9` + restart test passes with no peers online | todo |
 | **M3 Resilient peers** | No single point of failure; partitions heal by themselves | Simulation passes with `cross_register`/`force_sync` removed, plus a new partition test | todo |
 | **M4 Live mining** | The network runs on its own, like a real one | 3 auto-mining nodes stay converged for 10 min locally | todo |
@@ -89,7 +88,7 @@ AI may recommend; I decide. Record the choice and date here before starting the 
 | D1 | Where to run nodes | (a) 3 cloud VMs in 3 regions · (b) machines on one LAN · (c) mix | (a): real cross-region latency is the point; shut VMs down between sessions | M5 | — |
 | D2 | Storage format | JSON-lines file of blocks · SQLite | JSON-lines: no schema, easy to inspect, append-only | M2 | — |
 | D3 | Production server | Waitress · Gunicorn (1 worker, threads) | Waitress: runs on Windows too. Node state is in-process, so **never** run multiple workers | M5 | — |
-| D4 | How a node fetches missing parents | Walk back by hash (`GET /blocks/<hash>`) · Bitcoin-style block locator | Walk back by hash with a depth limit: simplest thing that fixes the gap | M1 | — |
+| D4 | How a node fetches missing parents | Walk back by hash (`GET /blocks/<hash>`) · Bitcoin-style block locator | Walk back by hash with a depth limit: simplest thing that fixes the gap | M1 | Walk back by hash, depth limit (2026-10-19) |
 | D5 | How to time propagation across machines | Nodes log receive times (needs NTP-synced clocks) · one observer polls all nodes | Node event logs; report the clock-sync caveat | M4 | — |
 | D6 | Branching | Commit to `main` · branch + PR per milestone | PR per milestone so CI runs on it; push only with my OK | M0 | — |
 
@@ -127,16 +126,18 @@ Status: `todo` · `doing` · `done` · `parked`. **Why** maps to outcomes 1–5 
 
 | ID | Task | Why | Done when | Status |
 |---|---|---|---|---|
-| B-10 | Reproduce the fork-convergence flake in a deterministic unit test (deliver child before parent) | 4 | The test fails on current code, and the root cause is written in its docstring | todo |
-| B-11 | Fetch missing ancestors by hash (D4) when a block's parent is unknown | 4 | B-10 passes; `simulate_failures.py --runs 20` → 20/20 | todo |
-| B-12 | Route full sync through `add_block`; no direct `_block_store` writes outside `Blockchain` | 4 | Grep shows no external writes; side branches survive a full sync (test) | todo |
-| B-13 | Reject a block unless `index == parent.index + 1` | 2 | Unit test | todo |
-| B-14 | Coinbase rules: exactly one, first in the block, amount = reward | 2 | Unit tests for each violation | todo |
-| B-15 | Validate balances inside a block, applied in order on the parent's state | 2 | Overspending block is rejected (test) | todo |
-| B-16 | Replay protection: tx_id unique within the block and the branch | 2 | Replayed signed tx rejected (test) | todo |
-| B-17 | Mempool subtracts pending spends when admitting a tx | 2 | Two txs that together overspend: second rejected (test) | todo |
-| B-18 | `/mine` returns 409 when its block lands on a side branch | 4 | Test with a concurrent competing block | todo |
-| B-19 | Minimal `wallet.py`: `keygen`, `send`, `balance`; nodes can mine to a key file (`MINER_KEY_FILE`) | 1, 5 | Integration test: keygen → mine → send → mine → same balance on all nodes | todo |
+| B-10 | Reproduce the fork-convergence flake in a deterministic unit test (deliver child before parent) | 4 | The test fails on current code, and the root cause is written in its docstring | done |
+| B-10a | Fork scenario in simulate_failures.py: after the concurrent mine, keep mining on A (max 3 tries) until A's tip is higher than B's fork block, then check convergence (test-only, node code unchanged) | 4 | `simulate_failures.py --runs 30`: the convergence check never fails from an equal-height tie | done |
+| B-11 | Fetch missing ancestors when a block's parent is unknown: walk back by hash (`GET /blocks/<hash>`, depth limit) | 4 | B-10 passes; `simulate_failures.py --runs 20` → 20/20 | done |
+| B-12 | Route full sync through `add_block`; no direct `_block_store` writes outside `Blockchain` | 4 | Grep shows no external writes; side branches survive a full sync (test) | done |
+| B-13 | Reject a block unless `index == parent.index + 1` | 2 | Unit test | done |
+| B-14 | Coinbase rules: exactly one, first in the block, amount = reward (note: `Transaction.from_dict` coerces amount to float; compare the reward as float) | 2 | Unit tests for each violation | done |
+| B-15 | Validate balances inside a block, applied in order on the parent's state | 2 | Overspending block is rejected (test) | done |
+| B-16 | Replay protection: tx_id unique within the block and the branch | 2 | Replayed signed tx rejected (test) | done |
+| B-17 | Mempool subtracts pending spends when admitting a tx | 2 | Two txs that together overspend: second rejected (test) | done |
+| B-17a | `/transactions/new` rejects COINBASE txs | 2 | Test: 400, nothing enters the mempool | done |
+| B-18 | `/mine` returns 409 when its block lands on a side branch | 4 | Test with a concurrent competing block | done |
+| B-19 | Minimal `wallet.py`: `keygen`, `send`, `balance`; nodes can mine to a key file (`MINER_PUBKEY_FILE`) | 1, 5 | Integration test: keygen → mine → send → mine → same balance on all nodes | done |
 
 ### M2 Durable nodes
 

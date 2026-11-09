@@ -1,0 +1,12 @@
+# Keep secrets and local clutter out of the image.
+wallets/
+*.key
+.env
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
